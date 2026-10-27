@@ -198,3 +198,7 @@ dialog.modal { overflow: visible; }
 
 /* channel and playlist results sit in the same grid as videos, as full-width rows */
 .grid > .item { grid-column: 1 / -1; }
+
+/* shown above the page while the engine boots and a saved feed is already on screen */
+.boot-banner { max-width: 1560px; margin: 4px 24px 0; padding: 10px 16px; border-radius: 999px; font-size: 14px; }
+@media (max-width: 760px) { .boot-banner { margin: 4px 14px 0; border-radius: 16px; } }

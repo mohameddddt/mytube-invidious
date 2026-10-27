@@ -5,6 +5,7 @@
 /* ------------------------------------------------------------------ helpers */
 const view = document.getElementById("view");
 let BASE = "http://localhost:3000";
+let engineReady = true; // false while WSL and Invidious are still booting
 let CFG = {}; // from /config.json: Invidious address and the download folders
 let renderId = 0;
 let cleanups = [];
@@ -297,7 +298,7 @@ function openDownloadDialog({ id, playlist, title, count }) {
 /* --------------------------------------------------------------------- cards */
 function thumbBox(href, id, lengthSeconds, live, progress) {
   return h("a", { class: "thumb", href },
-    h("img", { src: thumbUrl(id), loading: "lazy", alt: "", width: 320, height: 180 }),
+    h("img", { src: thumbUrl(id), loading: "lazy", alt: "", width: 320, height: 180, onerror: (e) => { e.target.style.visibility = "hidden"; } }),
     live ? h("span", { class: "badge live", text: "LIVE" }) : lengthSeconds ? h("span", { class: "badge", text: fmtDur(lengthSeconds) }) : null,
     progress ? h("span", { class: "bar", style: `width:${progress}%` }) : null);
 }
@@ -379,40 +380,53 @@ async function pageFeed(id, force) {
     return;
   }
   const sig = list.map((s) => s.ucid).sort().join(",");
-  let cache = store.get("feedCache", null);
-  const fresh = cache && cache.sig === sig && Date.now() - cache.at < 20 * 60 * 1000;
-  let items;
-  if (fresh && !force) items = cache.items;
-  else {
-    const status = h("p", { class: "muted", text: `Loading 0/${list.length} channels…` });
-    view.append(status);
-    const all = [];
-    let done = 0;
-    for (let i = 0; i < list.length; i += 4) {
-      const batch = list.slice(i, i + 4);
-      const results = await Promise.allSettled(batch.map((c) => api(`channels/${enc(c.ucid)}/videos`)));
-      if (id !== renderId) return;
-      for (const r of results) {
-        if (r.status !== "fulfilled") continue;
-        const vids = Array.isArray(r.value) ? r.value : r.value.videos || [];
-        for (const v of vids.slice(0, 12)) {
-          if (v.type && v.type !== "video") continue;
-          all.push({ videoId: v.videoId, title: v.title, author: v.author, authorId: v.authorId, lengthSeconds: v.lengthSeconds, viewCount: v.viewCount, published: v.published, liveNow: v.liveNow });
-        }
-      }
-      done += batch.length;
-      status.textContent = `Loading ${done}/${list.length} channels…`;
-    }
-    items = all.filter((v) => v.videoId).sort((a, b) => (b.published || 0) - (a.published || 0)).slice(0, 80);
-    if (items.length) store.set("feedCache", { sig, at: Date.now(), items });
-    status.remove();
+  const cache = store.get("feedCache", null);
+  const cached = cache && cache.sig === sig && cache.items && cache.items.length ? cache : null;
+  const fresh = cached && Date.now() - cached.at < 20 * 60 * 1000;
+  const n = list.length, plural = n === 1 ? "" : "s";
+
+  /* Stale-while-revalidate: show the saved copy at once, refresh behind it. */
+  const note = h("span", { class: "muted small" });
+  const grid = h("div", {});
+  view.append(h("div", { class: "row" }, note, h("span", { class: "spacer" }),
+    h("button", { class: "btn", text: "Refresh", onclick: () => route(true) })), grid);
+  const draw = (items, text) => {
+    note.textContent = `Latest from your ${n} channel${plural} · ${text}`;
+    grid.replaceChildren(items.length ? h("div", { class: "grid" }, items.map((v) => videoCard(v))) : h("p", { class: "empty", text: "No videos found. Invidious may be unreachable." }));
+  };
+  if (cached) {
+    draw(cached.items, !engineReady ? "saved copy, the engine is still starting" : fresh && !force ? "saved copy, refreshes every 20 minutes" : "showing your saved copy, updating…");
+    if (!engineReady || (fresh && !force)) return;
+  } else {
+    note.textContent = `Loading 0/${n} channels…`;
   }
-  const head = view.querySelector("h1");
-  head.after(h("div", { class: "row" },
-    h("span", { class: "muted small", text: `Latest from your ${list.length} channel${list.length === 1 ? "" : "s"} · ` + (cache && fresh && !force ? "saved copy, refreshes every 20 minutes" : "just updated") }),
-    h("span", { class: "spacer" }),
-    h("button", { class: "btn", text: "Refresh", onclick: () => { store.set("feedCache", null); route(true); } })));
-  view.append(items.length ? h("div", { class: "grid" }, items.map((v) => videoCard(v))) : h("p", { class: "empty", text: "No videos found. Invidious may be unreachable." }));
+
+  const all = [];
+  let done = 0;
+  for (let i = 0; i < list.length; i += 4) {
+    const batch = list.slice(i, i + 4);
+    const results = await Promise.allSettled(batch.map((c) => api(`channels/${enc(c.ucid)}/videos`)));
+    if (id !== renderId) return;
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      const vids = Array.isArray(r.value) ? r.value : r.value.videos || [];
+      for (const v of vids.slice(0, 12)) {
+        if (v.type && v.type !== "video") continue;
+        all.push({ videoId: v.videoId, title: v.title, author: v.author, authorId: v.authorId, lengthSeconds: v.lengthSeconds, viewCount: v.viewCount, published: v.published, liveNow: v.liveNow });
+      }
+    }
+    done += batch.length;
+    if (!cached) note.textContent = `Loading ${done}/${n} channels…`;
+  }
+  const items = all.filter((v) => v.videoId).sort((a, b) => (b.published || 0) - (a.published || 0)).slice(0, 80);
+  if (items.length) {
+    store.set("feedCache", { sig, at: Date.now(), items });
+    draw(items, "just updated");
+  } else if (cached) {
+    draw(cached.items, "could not refresh right now, showing your saved copy");
+  } else {
+    draw([], "");
+  }
 }
 
 async function pageSearch(id, params) {
@@ -905,33 +919,48 @@ sg.addEventListener("pointerdown", (e) => {
 });
 window.addEventListener("hashchange", () => route());
 
-/* Start-up screen: shown while WSL and the containers are still booting (about a minute on a cold start). */
-async function waitForEngine() {
+/* Start-up: WSL and the containers take about 15 s to boot on a cold start. */
+async function engineStatus() {
+  try { return (await (await fetch("/status")).json()).invidious; } catch { return true; } // old backend: assume ready
+}
+
+async function waitForEngine(withSplash) {
   const started = Date.now();
   let slow = null, skip = false;
   for (;;) {
-    try {
-      const st = await (await fetch("/status")).json();
-      if (st.invidious) return;
-    } catch { return; } // backend without /status: just carry on
-    if (!slow) {
+    if (await engineStatus()) return;
+    if (withSplash && !slow) {
       slow = h("div", { class: "muted small", hidden: true, style: "margin-top:14px" },
         h("p", { text: "Still waiting. Make sure WSL and Docker started (see the launch guide)." }),
         h("button", { class: "btn", text: "Continue anyway", onclick: () => { skip = true; } }));
       view.replaceChildren(h("div", { class: "empty splash" },
         h("p", {}, h("span", { class: "spin" }), "Starting the engine…"),
-        h("p", { class: "small", style: "font-family:system-ui,sans-serif", text: "Booting WSL and the Invidious containers. This takes about a minute on a cold start." }),
+        h("p", { class: "small", style: "font-family:system-ui,sans-serif", text: "Booting WSL and the Invidious containers. This takes about 15 seconds on a cold start." }),
         slow));
     }
-    if (Date.now() - started > 90000) slow.hidden = false;
+    if (slow && Date.now() - started > 90000) slow.hidden = false;
     if (skip) return;
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 700));
   }
 }
 
 (async function boot() {
   applyTheme();
   try { CFG = await (await fetch("/config.json")).json(); BASE = CFG.invidious.replace(/\/$/, ""); } catch { /* keep default */ }
-  await waitForEngine();
+  if (!(await engineStatus())) {
+    const onHome = !location.hash || location.hash === "#/" || location.hash === "#";
+    if (onHome && store.get("feedCache", null)) {
+      // There is a saved feed: show it now and let the engine finish booting behind it.
+      engineReady = false;
+      const banner = h("div", { class: "panel boot-banner" }, h("span", { class: "spin" }), "Starting the engine… thumbnails and playback appear in a few seconds.");
+      route();
+      view.before(banner);
+      await waitForEngine(false);
+      engineReady = true;
+      banner.remove();
+      return route();
+    }
+    await waitForEngine(true);
+  }
   route();
 })();
