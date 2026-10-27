@@ -25,11 +25,119 @@ Browser ── http://localhost:8080 ──> server.py ──> Invidious ──>
 
 Watching and downloading both use your home IP address, so hosting adds no extra internet traffic.
 
-## Requirements
+## Prerequisites: install these first
 
-- Windows 11 with virtualization enabled, 8 GB RAM recommended (4 GB minimum)
-- WSL2 with Ubuntu 24.04, and Docker Engine inside it
-- Python 3.9+, [yt-dlp](https://github.com/yt-dlp/yt-dlp), [ffmpeg](https://ffmpeg.org) and [Deno](https://deno.com) on Windows
+My Tube is a launcher and interface; the heavy lifting is done by tools that must be on the PC. Everything is free. Do the steps **in this order**, once. After any `winget` install, open a **new** terminal so the new commands are found.
+
+| # | What | What it is for | Download / docs |
+|---|---|---|---|
+| 1 | Windows 11 (x64) with virtualization on, 8 GB RAM recommended | runs WSL2 | check in *Task Manager → Performance → CPU → Virtualization: Enabled* |
+| 2 | WSL2 + Ubuntu 24.04 | the Linux VM that hosts Invidious | [learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install) |
+| 3 | Docker Engine (inside Ubuntu, not Docker Desktop) | runs Invidious, its companion and its database | [docs.docker.com/engine/install/ubuntu](https://docs.docker.com/engine/install/ubuntu/) |
+| 4 | Invidious + companion + Postgres | search, metadata and streams | [docs.invidious.io/installation](https://docs.invidious.io/installation/) · [Invidious](https://github.com/iv-org/invidious) · [companion](https://github.com/iv-org/invidious-companion) |
+| 5 | yt-dlp | downloads | [github.com/yt-dlp/yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) |
+| 6 | ffmpeg | merges video and audio, makes MP3s | [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) |
+| 7 | Deno | lets yt-dlp solve YouTube's JavaScript checks | [docs.deno.com/runtime/getting_started/installation](https://docs.deno.com/runtime/getting_started/installation/) |
+| 8 | Python 3.12+ | installs yt-dlp, runs the browser-tab mode and builds from source | [python.org/downloads/windows](https://www.python.org/downloads/windows/) |
+| 9 | Microsoft Edge (or Chrome) | the app window; Edge is already part of Windows 11 | built in |
+
+### 1 and 2. WSL2 with Ubuntu
+
+Open **PowerShell as Administrator**, install, then **reboot**:
+
+```powershell
+wsl --install -d Ubuntu-24.04
+```
+
+Start *Ubuntu 24.04* from the Start Menu once and create your Linux user name and password. Check it is on version 2:
+
+```powershell
+wsl -l -v
+```
+
+Recommended: cap the VM's memory so it never grows beyond what Invidious needs. Create `%USERPROFILE%\.wslconfig` with this content, then run `wsl --shutdown`. (It applies to every WSL distro on the PC; raise `memory` if you do heavy work in Linux.)
+
+```ini
+[wsl2]
+memory=1536MB
+processors=2
+swap=1GB
+
+[experimental]
+autoMemoryReclaim=gradual
+```
+
+### 3. Docker Engine inside Ubuntu
+
+Open the Ubuntu terminal and run:
+
+```bash
+sudo apt update && sudo apt install -y ca-certificates curl git openssl
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+```
+
+Then, in PowerShell, restart WSL so the group change applies, and test Docker:
+
+```powershell
+wsl --shutdown
+wsl -d Ubuntu-24.04 -- docker run --rm hello-world
+```
+
+Docker must start by itself with WSL, which needs systemd. Ubuntu 24.04 on current WSL has it on; if `docker` does not start, check that `/etc/wsl.conf` contains `[boot]` and `systemd=true` (full details: [build guide, section 6.3](docs/BUILD-GUIDE.md)).
+
+### 4. Invidious, companion and Postgres
+
+The repository ships a script that downloads Invidious, generates the secret keys, writes a locked-down `compose.yaml` and starts everything. Run it from a folder that contains `deploy\`: your clone of this repository, or the install folder.
+
+```powershell
+# from a clone of this repository
+cd mytube-invidious
+wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh
+
+# or, if you installed the app with the installer
+cd "$env:LOCALAPPDATA\Programs\My Tube"
+wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh
+```
+
+It installs into `~/invidious` inside Ubuntu and never overwrites existing keys, so it is safe to run again. Add `--no-start` to only prepare the files. Official reference: [docs.invidious.io/installation](https://docs.invidious.io/installation/).
+
+### 5 to 8. yt-dlp, ffmpeg, Deno and Python (Windows)
+
+```powershell
+winget install Python.Python.3.12
+winget install Gyan.FFmpeg
+winget install DenoLand.Deno
+```
+
+Open a new terminal, then install yt-dlp with its extras. The `[default]` part bundles the solver for YouTube's JavaScript challenges; without it some videos, Shorts especially, lose formats:
+
+```powershell
+python -m pip install -U "yt-dlp[default]"
+```
+
+Alternative without Python: `winget install yt-dlp.yt-dlp`. The app finds yt-dlp on your `PATH` and in the usual install folders, so either works. Keep it current, because YouTube changes often (`update-yt.bat` does this).
+
+### Check that everything is in place
+
+```powershell
+wsl -l -v                                         # Ubuntu-24.04, VERSION 2
+wsl -d Ubuntu-24.04 -- docker run --rm hello-world
+wsl -d Ubuntu-24.04 -- ls ~/invidious/compose.yaml
+yt-dlp --version
+ffmpeg -version
+deno --version
+python --version
+```
+
+### Only if you build from source
+
+```powershell
+winget install Git.Git                            # to clone the repository
+winget install JRSoftware.InnoSetup --scope user  # to build the installer (build-installer.bat)
+```
+
+Links: [git-scm.com/download/win](https://git-scm.com/download/win) · [Inno Setup releases](https://github.com/jrsoftware/issrc/releases). PyInstaller and Pillow, which the build needs, are installed automatically by the build scripts.
 
 ## Install
 
@@ -42,22 +150,23 @@ The installer and the app are **signed**, with a free self-signed certificate (a
 
 To make Windows show the signature as valid on your own PC, install `mytube-signing.cer` (attached to the release) into *Current User → Trusted Root Certification Authorities* yourself. Only do that if you trust this project, since it makes Windows trust anything signed with that key for your account.
 
-The app is a launcher, so Invidious, WSL, Docker and yt-dlp must be set up on the PC (see the [launch guide](docs/LAUNCH-GUIDE.md#first-time-setup-on-a-new-pc)).
+The app is a launcher, so everything under [Prerequisites](#prerequisites-install-these-first) must be set up on the PC first.
 
 ## Quick start
 
-**Already installed?** Double-click **`dist\MyTube.exe`** (build it once with `build-exe.bat`). It starts everything and opens My Tube in its own window; closing the window stops everything. Prefer a browser tab? Double-click `start-yt.bat` instead, and `stop-yt.bat` when you finish.
+Prerequisites done? Then:
 
-**First time on this PC?** Follow the [setup checklist in the launch guide](docs/LAUNCH-GUIDE.md#first-time-setup-on-a-new-pc). In short:
+- **Installed with the installer:** open **My Tube** from the Start Menu. It starts everything and opens in its own window; closing the window stops everything.
+- **Prefer a browser tab?** Run `start-yt.bat` from a clone of this repository (and `stop-yt.bat` when you finish).
+- **Running from source:**
 
 ```powershell
-winget install Python.Python.3.12 Gyan.FFmpeg DenoLand.Deno
-python -m pip install -U "yt-dlp[default]"
 git clone https://github.com/mohameddddt/mytube-invidious.git
 cd mytube-invidious
-wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh   # Invidious + companion + Postgres, keys generated for you
-.\start-yt.bat
+python launcher.py        # the same thing the app does, without building an exe
 ```
+
+To produce the exe or the installer yourself, see [The desktop app](#the-desktop-app).
 
 ## The desktop app
 
@@ -69,7 +178,7 @@ wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh   # Invidious + companion 
 
 Closing the window stops everything it started and returns all of WSL's memory. If a download is still running it asks first.
 
-Build just the exe with `build-exe.bat` (writes `dist\MyTube.exe`), or the signed installer with `build-installer.bat` (writes `dist\MyTube-Setup-<version>.exe`; it needs [Inno Setup](https://jrsoftware.org/isinfo.php), `winget install JRSoftware.InnoSetup --scope user`, and signs with the certificate from `tools\make_cert.ps1`). The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
+Build just the exe with `build-exe.bat` (writes `dist\MyTube.exe`), or the signed installer with `build-installer.bat` (writes `dist\MyTube-Setup-<version>.exe`; it needs [Inno Setup](https://github.com/jrsoftware/issrc/releases), `winget install JRSoftware.InnoSetup --scope user`, and signs with the certificate from `tools\make_cert.ps1`). The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
 
 **The app and the browser always match.** Your subscriptions, history, watch-later list, settings and saved feed are stored in one file on the PC, `%LOCALAPPDATA%\MyTube\userdata.json`, behind the local server. The app window, a browser tab on `http://localhost:8080` and any other browser all read and write that same file, so a channel you subscribe to in one shows up in the others (a window refreshes when you switch back to it). The first time a browser or the app connects, whatever it already had is merged in, so nothing is lost.
 
