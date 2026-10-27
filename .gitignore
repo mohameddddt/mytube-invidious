@@ -1,0 +1,16 @@
+# yt-dlp archive created by playlist downloads
+archive.txt
+
+# secrets and local state: never commit
+.env
+compose.yaml
+*.key
+
+# python / editors
+__pycache__/
+*.pyc
+.vscode/
+.claude/
+
+# test output
+*.png
