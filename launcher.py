@@ -87,6 +87,30 @@ def open_window(browser):
                              "--no-default-browser-check", "--disable-background-mode", "--window-size=1360,860"])
 
 
+def profile_in_use(browser):
+    """True while a main browser process (not a helper) is running with our window profile."""
+    name = os.path.basename(browser)
+    script = (f"@(Get-CimInstance Win32_Process -Filter \"Name='{name}'\" | Where-Object "
+              f"{{ $_.CommandLine -like '*window-profile*' -and $_.CommandLine -notlike '*--type=*' }}).Count")
+    res = run_quiet(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], 20)
+    return bool(res and res.stdout.strip().isdigit() and int(res.stdout.strip()) > 0)
+
+
+def wait_for_window(browser):
+    """Open the window and block until the user closes it.
+
+    If the browser exits at once it handed the window to a process that already owned the profile
+    (for example one still shutting down from the previous run), so keep waiting for that one.
+    """
+    started = time.time()
+    open_window(browser).wait()
+    if time.time() - started < 10:
+        log("window process exited quickly, waiting for the profile's browser to finish")
+        time.sleep(3)
+        while profile_in_use(browser):
+            time.sleep(2)
+
+
 # --------------------------------------------------------------------------- the stack in WSL
 def start_stack():
     cmd = ["wsl", "-d", DISTRO, "--", "bash", "-lc", "cd ~/invidious && docker compose up -d && exec sleep infinity"]
@@ -144,9 +168,8 @@ def main():
     try:
         while True:
             if browser:
-                proc = open_window(browser)
-                log(f"window opened ({os.path.basename(browser)})")
-                proc.wait()
+                log(f"opening window ({os.path.basename(browser)})")
+                wait_for_window(browser)
                 log("window closed")
             else:  # no Edge/Chrome: use the default browser and wait for the user to say stop
                 os.startfile(URL)
