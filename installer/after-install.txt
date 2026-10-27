@@ -1,0 +1,11 @@
+My Tube is installed.
+
+It is a launcher: it starts your Invidious containers in WSL, runs a small local server and opens the interface in its own window. For that it needs, on this PC:
+
+  - WSL2 with an Ubuntu distribution (default name: Ubuntu-24.04) and Docker Engine inside it
+  - Invidious set up in ~/invidious (run deploy\setup-invidious.sh inside WSL, once)
+  - yt-dlp, ffmpeg and Deno for downloads (winget install yt-dlp.yt-dlp Gyan.FFmpeg DenoLand.Deno)
+
+Everything is explained in the launch guide: docs\LAUNCH-GUIDE.md in the install folder, or on GitHub.
+
+Closing the My Tube window stops everything it started and gives WSL's memory back.
