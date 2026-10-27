@@ -129,9 +129,13 @@ def active_jobs():
 
 
 def invidious_up():
+    """Does Invidious answer HTTP at all? Its home page is rendered locally, so unlike a search this
+    does not wait for a round trip to YouTube. Any HTTP reply counts, even an error page."""
     try:
-        with urllib.request.urlopen(f"{INVIDIOUS}/api/v1/search/suggestions?q=a", timeout=3) as r:
-            return r.status == 200
+        with urllib.request.urlopen(f"{INVIDIOUS}/", timeout=3):
+            return True
+    except urllib.error.HTTPError:
+        return True
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
         return False
 

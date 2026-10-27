@@ -10,6 +10,7 @@ Run it from source with:  python launcher.py
 import ctypes
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -23,6 +24,7 @@ import server
 APP = "My Tube"
 URL = f"http://localhost:{server.PORT}"
 DATA = server.DATA_DIR
+stopping = threading.Event()  # set once we are shutting down on purpose
 PROFILE = DATA / "window-profile"  # the app window keeps its own settings (subscriptions, history) here
 LOG = DATA / "mytube.log"
 DISTRO = str(server.CONFIG.get("distro") or "Ubuntu-24.04")
@@ -64,12 +66,13 @@ def url_ok(path, timeout=2):
         return False
 
 
-def distro_exists():
-    res = run_quiet(["wsl", "-l", "-q"], 20)
-    if not res or res.returncode != 0:
+def port_open(port, timeout=0.3):
+    """Fast 'is anything listening' check. Much cheaper than an HTTP request through WSL's relay."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout).close()
+        return True
+    except OSError:
         return False
-    names = res.stdout.decode("utf-16-le", errors="ignore").replace("\x00", "").split()
-    return DISTRO in names
 
 
 def find_browser():
@@ -84,7 +87,8 @@ def open_window(browser):
     """App-mode window with a private profile, so the process lives exactly as long as the window."""
     PROFILE.mkdir(parents=True, exist_ok=True)
     return subprocess.Popen([browser, f"--app={URL}", f"--user-data-dir={PROFILE}", "--no-first-run",
-                             "--no-default-browser-check", "--disable-background-mode", "--window-size=1360,860"])
+                             "--no-default-browser-check", "--disable-background-mode", "--disable-extensions",
+                             "--disable-sync", "--disable-component-update", "--window-size=1360,860"])
 
 
 def profile_in_use(browser):
@@ -113,9 +117,21 @@ def wait_for_window(browser):
 
 # --------------------------------------------------------------------------- the stack in WSL
 def start_stack():
-    cmd = ["wsl", "-d", DISTRO, "--", "bash", "-lc", "cd ~/invidious && docker compose up -d && exec sleep infinity"]
+    boot = "until docker info >/dev/null 2>&1; do sleep 0.2; done; cd ~/invidious && docker compose up -d && exec sleep infinity"
+    cmd = ["wsl", "-d", DISTRO, "--", "bash", "-lc", boot]
     return subprocess.Popen(cmd, creationflags=NO_WINDOW, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def watch_stack(keepalive):
+    """The keepalive session never ends by itself. If it does, WSL or Docker could not be started."""
+    code = keepalive.wait()
+    if stopping.is_set():
+        return
+    log(f"stack process ended early with code {code}")
+    message(f'The Invidious containers could not be started (exit code {code}).\n\n'
+            f'Check that the WSL distribution "{DISTRO}" exists, that Docker is installed in it and that '
+            f'~/invidious has been set up (see the launch guide).\n\nYou can set "distro" in {DATA / "config.json"}.', 0x10)
 
 
 def stop_stack(keepalive):
@@ -134,36 +150,44 @@ def main():
 
     mutex = kernel32.CreateMutexW(None, False, "Local\\MyTubeLauncher")  # noqa: F841 - held for the process lifetime
     second_copy = kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+
+    # Socket checks only: an HTTP request to a closed localhost port costs about 2 s on Windows.
+    already_serving = port_open(server.PORT)
+
+    # Start WSL before anything else: booting its VM takes the longest (about 8 s) and now overlaps with the rest.
+    keepalive = None
+    if not second_copy and not already_serving and not port_open(3000):  # we only stop what we started
+        keepalive = start_stack()
+        threading.Thread(target=watch_stack, args=(keepalive,), daemon=True).start()
+        log("starting containers")
+
     browser = find_browser()
 
     # Already running (second click, or start-yt.bat is in use): just show another window onto it.
-    if second_copy or url_ok("/config.json"):
+    if second_copy or already_serving:
         log("attaching to a running instance")
-        if not url_ok("/config.json"):
+        if not already_serving:
             return message("My Tube is already starting or shutting down.\n\nTry again in a few seconds.")
+        if not url_ok("/config.json"):  # something listens on our port, but it is not My Tube
+            return message(f"Port {server.PORT} is in use by another program, so My Tube cannot start.\n\n"
+                           f"Close that program, or set the YT_PORT environment variable.", 0x10)
         if browser:
             open_window(browser)
         else:
             os.startfile(URL)
         return
 
-    if not distro_exists():
-        return message(f'The WSL distribution "{DISTRO}" was not found.\n\nInstall it as described in the launch guide, '
-                       f'or set "distro" in {DATA / "config.json"}.', 0x10)
-
     try:
         httpd = server.create_server()
     except OSError as exc:
         log(f"cannot bind port: {exc}")
+        stopping.set()
+        if keepalive is not None:
+            stop_stack(keepalive)
         return message(f"Port {server.PORT} is in use by another program, so My Tube cannot start.\n\n"
                        f"Close that program, or set the YT_PORT environment variable.", 0x10)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     log(f"server up on {URL}")
-
-    keepalive = None
-    if not server.invidious_up():  # we only stop what we started
-        keepalive = start_stack()
-        log("starting containers")
 
     try:
         while True:
@@ -179,6 +203,7 @@ def main():
                 continue  # chose No: bring the window back
             break
     finally:
+        stopping.set()
         for job in server.active_jobs():
             server.cancel_job(job["id"])
         httpd.shutdown()

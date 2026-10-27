@@ -6,7 +6,7 @@ rem   3. opens the browser once Invidious answers
 cd /d "%~dp0"
 
 curl.exe -s -f -o nul "http://localhost:3000/api/v1/search/suggestions?q=a" && goto invidious_up
-start "yt-wsl" /min wsl -d Ubuntu-24.04 -- bash -lc "cd ~/invidious && docker compose up -d && exec sleep infinity"
+start "yt-wsl" /min wsl -d Ubuntu-24.04 -- bash -lc "until docker info >/dev/null 2>&1; do sleep 0.2; done; cd ~/invidious && docker compose up -d && exec sleep infinity"
 :invidious_up
 
 curl.exe -s -f -o nul "http://localhost:8080/config.json" && goto ui_up
