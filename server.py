@@ -4,7 +4,8 @@ Standard library only. Binds to 127.0.0.1:8080 unless YT_BIND / YT_PORT say othe
 
 Routes
   GET  /                 static UI from ./web
-  GET  /config.json      addresses the UI needs (Invidious base, companion)
+  GET  /config.json      addresses the UI needs (Invidious base, download folders)
+  GET  /status           whether Invidious answers yet (the UI shows a start-up screen until it does)
   GET  /api/*            forwarded to Invidious /api/v1/*
   POST /download         {id | playlist, profile, title?, limit?} -> 202, runs yt-dlp
   POST /cancel           {job} stops a queued or running download
@@ -29,16 +30,34 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-ROOT = Path(__file__).resolve().parent
-WEB = ROOT / "web"
+FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller exe
+ROOT = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent  # where web/ lives
 HOME = Path(os.environ.get("USERPROFILE", str(Path.home())))
+# Things that must survive restarts (archives, config, window profile): next to the source when
+# developing, in %LOCALAPPDATA%\MyTube when running as the exe (the exe's own folder is temporary).
+DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "MyTube" if FROZEN else ROOT
+WEB = ROOT / "web"
 VIDEO_DIR = HOME / "Videos" / "yt"
 AUDIO_DIR = HOME / "Music" / "yt"
 
 
+def load_config():
+    """Optional config.json in DATA_DIR: {"ytdlp": "C:\\path\\yt-dlp.exe", "distro": "Ubuntu-24.04"}."""
+    try:
+        data = json.loads((DATA_DIR / "config.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+CONFIG = load_config()
+
+
 def archive_for(profile):
     """yt-dlp archive file per kind, so an audio run never makes a later video run skip everything."""
-    return ROOT / ("archive-audio.txt" if PROFILES[profile]["dir"] == AUDIO_DIR else "archive-video.txt")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return DATA_DIR / ("archive-audio.txt" if PROFILES[profile]["dir"] == AUDIO_DIR else "archive-video.txt")
+
 
 BIND = os.environ.get("YT_BIND", "127.0.0.1")
 PORT = int(os.environ.get("YT_PORT", "8080"))
@@ -82,7 +101,39 @@ def tool_env():
 
 
 def find_ytdlp(env):
-    return shutil.which("yt-dlp", path=env["PATH"])
+    """PATH first, then the places yt-dlp usually lands, so a double-clicked exe works with a bare PATH."""
+    configured = CONFIG.get("ytdlp")
+    if isinstance(configured, str) and Path(configured).is_file():
+        return configured
+    found = shutil.which("yt-dlp", path=env["PATH"])
+    if found:
+        return found
+    local = HOME / "AppData" / "Local"
+    roaming = HOME / "AppData" / "Roaming"
+    candidates = [local / "Microsoft" / "WinGet" / "Links" / "yt-dlp.exe"]
+    for base in (HOME / "miniconda3", HOME / "anaconda3", HOME / "AppData" / "Local" / "miniconda3"):
+        candidates.append(base / "Scripts" / "yt-dlp.exe")
+    for pattern_root in (roaming / "Python", local / "Programs" / "Python"):
+        if pattern_root.is_dir():
+            candidates += sorted(pattern_root.glob("Python*/Scripts/yt-dlp.exe"), reverse=True)
+    return next((str(c) for c in candidates if c.is_file()), None)
+
+
+YTDLP_MISSING = ('yt-dlp was not found. Install it with "winget install yt-dlp.yt-dlp" (or '
+                 '"python -m pip install -U yt-dlp[default]"), or set "ytdlp" in ' + str(DATA_DIR / "config.json"))
+
+
+def active_jobs():
+    with jobs_lock:
+        return [j for j in jobs.values() if j["status"] in ("queued", "running")]
+
+
+def invidious_up():
+    try:
+        with urllib.request.urlopen(f"{INVIDIOUS}/api/v1/search/suggestions?q=a", timeout=3) as r:
+            return r.status == 200
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+        return False
 
 
 def clean_title(value):
@@ -115,7 +166,7 @@ def run_job(job_id):
     env = tool_env()
     exe = find_ytdlp(env)
     if not exe:
-        return finish(job, status="error", error="yt-dlp not found on PATH")
+        return finish(job, status="error", error=YTDLP_MISSING)
     profile = PROFILES[job["profile"]]
     profile["dir"].mkdir(parents=True, exist_ok=True)
     cmd = [exe, *profile["args"], *COMMON, "-P", str(profile["dir"]),
@@ -287,6 +338,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/config.json":
             return self.send_json({"invidious": INVIDIOUS_PUBLIC, "maxJobs": MAX_JOBS,
                                    "videoDir": str(VIDEO_DIR), "audioDir": str(AUDIO_DIR)})
+        if path == "/status":
+            return self.send_json({"invidious": invidious_up(), "ytdlp": bool(find_ytdlp(tool_env()))})
         if path.startswith("/api/"):
             return self.proxy_api()
         if path == "/jobs":
@@ -441,11 +494,17 @@ class Handler(BaseHTTPRequestHandler):
             pass  # the player closed the connection (seek / navigation)
 
 
-def main():
+def create_server():
+    """Bind the HTTP server (raises OSError if the port is taken). Used by main() and by launcher.py."""
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     httpd.daemon_threads = True
+    return httpd
+
+
+def main():
+    httpd = create_server()
     print(f"UI backend on http://{BIND}:{PORT}  ->  Invidious {INVIDIOUS}", flush=True)
     try:
         httpd.serve_forever()
