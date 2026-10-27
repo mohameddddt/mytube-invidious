@@ -4,6 +4,19 @@ How to start, use, stop and look after My Tube once it is installed. For the fir
 
 ## Every day
 
+### The app: MyTube.exe (recommended)
+
+Double-click **`dist\MyTube.exe`**. A window titled *My Tube* opens at once, shows "Starting the engine" while WSL and the containers boot (about a minute on a cold start, under half a minute when WSL is warm), then loads your feed. **Close the window to stop everything**; if a download is still running you are asked first.
+
+- **First time only:** build it with `build-exe.bat` (needs Python; PyInstaller is installed automatically). Then pin `dist\MyTube.exe` to the taskbar or make a desktop shortcut.
+- **Second click:** clicking it again while it runs opens another window onto the same session; closing that extra window does not stop anything.
+- **Already started with `start-yt.bat`?** The exe attaches to that session and leaves it running when you close the window.
+- **Its own data:** the app window keeps its subscriptions and history separately from your browser. Move them with **Settings → Export JSON** in the browser and **Import JSON** in the app.
+- **Logs and settings** live in `%LOCALAPPDATA%\MyTube` (`mytube.log`, and an optional `config.json`, see [below](#changing-things)).
+- **Windows warns about the exe?** It is unsigned. Choose *More info → Run anyway*, or just run `python launcher.py`, which does the same thing without an exe.
+
+### Or in a browser tab: start-yt.bat
+
 ### 1. Start it
 
 Double-click **`start-yt.bat`**.
@@ -107,6 +120,8 @@ YouTube changes often. When something stops working, updating is the first fix, 
 | `start-yt.bat` opens the browser but the page is blank | Another program uses port 8080. Close it, or start the server on another port: `set YT_PORT=8090` then `python server.py`. |
 | Containers stop on their own | The `yt-wsl` window was closed. Start again with `start-yt.bat`. |
 | Everything is slow or memory is tight | Check **Task Manager → VmmemWSL**. After `stop-yt.bat` it must disappear. Lower `memory=` in `%USERPROFILE%\.wslconfig` if you need more RAM for Windows. |
+| The exe says yt-dlp was not found | Install it with `winget install yt-dlp.yt-dlp`, or set `ytdlp` in `config.json` (see Changing things). |
+| The exe shows "WSL distribution not found" | Your distro has another name. Set `distro` in `config.json`. |
 | `python` is not recognized | Install Python 3 and tick "Add to PATH", or edit `start-yt.bat` to use the full path of your Python. |
 
 ## First-time setup on a new PC
@@ -130,7 +145,7 @@ Short version; every step is explained in [BUILD-GUIDE.md](BUILD-GUIDE.md).
    wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh
    ```
    WSL opens in the same folder you are in, so the relative path works. The script installs Invidious in `~/invidious` inside Ubuntu and starts it. Run it with `--no-start` to only prepare the files.
-6. Run `start-yt.bat`. If your distro isn't called `Ubuntu-24.04`, edit the name in the three `.bat` files first.
+6. Run `build-exe.bat` once, then double-click `dist\MyTube.exe` (or use `start-yt.bat` for a browser tab). If your distro isn't called `Ubuntu-24.04`, set `distro` in `%LOCALAPPDATA%\MyTube\config.json` for the exe, and edit the name in the three `.bat` files for the browser route.
 
 ## Changing things
 
@@ -138,5 +153,6 @@ Short version; every step is explained in [BUILD-GUIDE.md](BUILD-GUIDE.md).
 |---|---|
 | Another download folder | `VIDEO_DIR` / `AUDIO_DIR` at the top of `server.py` |
 | Another web port | Environment variable `YT_PORT` |
+| Another WSL distro name, or a yt-dlp in an unusual place (exe) | `%LOCALAPPDATA%\MyTube\config.json`, for example `{"distro": "Ubuntu-22.04", "ytdlp": "C:\\tools\\yt-dlp.exe"}` |
 | Different Invidious address (another machine) | `INVIDIOUS_URL` and `INVIDIOUS_PUBLIC_URL` environment variables, and `public_url` in `compose.yaml` |
 | Phone or other devices | [BUILD-GUIDE.md](BUILD-GUIDE.md), section 12 (Tailscale is the safe way) |

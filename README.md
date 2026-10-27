@@ -33,7 +33,7 @@ Watching and downloading both use your home IP address, so hosting adds no extra
 
 ## Quick start
 
-**Already installed?** Double-click `start-yt.bat`. Your browser opens at http://localhost:8080. When you finish, double-click `stop-yt.bat`.
+**Already installed?** Double-click **`dist\MyTube.exe`** (build it once with `build-exe.bat`). It starts everything and opens My Tube in its own window; closing the window stops everything. Prefer a browser tab? Double-click `start-yt.bat` instead, and `stop-yt.bat` when you finish.
 
 **First time on this PC?** Follow the [setup checklist in the launch guide](docs/LAUNCH-GUIDE.md#first-time-setup-on-a-new-pc). In short:
 
@@ -46,6 +46,20 @@ wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh   # Invidious + companion 
 .\start-yt.bat
 ```
 
+## The desktop app
+
+`MyTube.exe` is one file of about 7 MB that contains the launcher, the local server and the whole interface. Click it and it:
+
+1. starts the Invidious containers in WSL (unless they are already running),
+2. starts the local server,
+3. opens My Tube in its own window (Edge in app mode: no tabs, no address bar).
+
+Closing the window stops everything it started and returns all of WSL's memory. If a download is still running it asks first.
+
+Build it with `build-exe.bat`, which installs PyInstaller on first use and writes `dist\MyTube.exe`. The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
+
+The app window keeps its own subscriptions, history and settings. To bring them over from a browser, use **Settings → Export JSON** there and **Import JSON** in the app.
+
 ## Documentation
 
 | Document | What is in it |
@@ -56,12 +70,15 @@ wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh   # Invidious + companion 
 ## Repository layout
 
 ```
+launcher.py               desktop launcher, packaged as MyTube.exe (starts the stack, the server and the app window)
 server.py                 local backend: serves the UI, proxies Invidious, runs yt-dlp jobs
 web/                      the interface (index.html, style.css, app.js), no build step
-start-yt.bat              start everything on demand
+build-exe.bat             build dist\MyTube.exe (PyInstaller)
+start-yt.bat              start everything on demand, in a browser tab
 stop-yt.bat               stop everything and free all WSL memory
 update-yt.bat             update Invidious, companion, yt-dlp, Deno and ffmpeg
 deploy/                   compose template and the script that installs Invidious in WSL
+tools/, assets/           build helpers and the app icon
 docs/                     build guide and launch guide
 ```
 

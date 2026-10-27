@@ -6,6 +6,12 @@ archive*.txt
 compose.yaml
 *.key
 
+# exe build output and local config
+build/
+dist/
+*.spec
+config.json
+
 # python / editors
 __pycache__/
 *.pyc
