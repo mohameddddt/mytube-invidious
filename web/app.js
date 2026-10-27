@@ -35,11 +35,76 @@ const store = {
     } catch { /* storage blocked: fall through to memory */ }
     return key in mem ? mem[key] : def;
   },
-  set(key, val) {
+  set(key, val, push = true) {
     mem[key] = val;
     try { localStorage.setItem("yt." + key, JSON.stringify(val)); } catch { /* ignore */ }
+    if (push && SYNC_KEYS.includes(key)) schedulePush(key);
   },
 };
+
+/* ------------------------------------------------------------------ shared data
+   Subscriptions, history, watch later, settings and the feed copy live in one file on the PC, behind
+   the local server, so the desktop app and any browser tab always show the same thing. localStorage is
+   only a fast local copy of it. */
+const SYNC_KEYS = ["subscriptions", "history", "watchLater", "settings", "feedCache"];
+const pending = new Set();
+const pushTimers = {};
+
+function postState(key, value, keepalive) {
+  return fetch("/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, value }), keepalive: !!keepalive }).catch(() => {});
+}
+function schedulePush(key) {
+  pending.add(key);
+  clearTimeout(pushTimers[key]);
+  pushTimers[key] = setTimeout(() => { pending.delete(key); postState(key, store.get(key, null)); }, 800);
+}
+async function flushPending(keepalive) {
+  const keys = [...pending];
+  keys.forEach((k) => { clearTimeout(pushTimers[k]); pending.delete(k); });
+  await Promise.all(keys.map((k) => postState(k, store.get(k, null), keepalive)));
+}
+
+/* First time a window meets the server it merges what it already has, so nothing is lost. */
+function mergeFirst(key, local, remote) {
+  if (remote == null) return local;
+  if (local == null) return remote;
+  const union = (id) => { const seen = new Set(remote.map((x) => x && x[id])); return [...remote, ...local.filter((x) => x && !seen.has(x[id]))]; };
+  if (key === "subscriptions") return union("ucid");
+  if (key === "watchLater") return union("id");
+  if (key === "history") {
+    const byId = new Map();
+    for (const e of [...remote, ...local]) {
+      if (!e || !e.id) continue;
+      const old = byId.get(e.id);
+      if (!old || (e.watchedAt || 0) > (old.watchedAt || 0)) byId.set(e.id, e);
+    }
+    return [...byId.values()].sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0)).slice(0, 500);
+  }
+  if (key === "settings") return { ...local, ...remote };
+  return (local.at || 0) > (remote.at || 0) ? local : remote; // feedCache: the newer copy
+}
+
+/* Returns true when this window's data changed because of what the server had. */
+async function syncFromServer() {
+  await flushPending();
+  let remote;
+  try {
+    const res = await fetch("/state");
+    if (!res.ok) return false;
+    remote = await res.json();
+  } catch { return false; }
+  const first = !store.get("synced", false);
+  let changed = false;
+  for (const key of SYNC_KEYS) {
+    const local = store.get(key, null);
+    const theirs = remote[key] === undefined ? null : remote[key];
+    const merged = first ? mergeFirst(key, local, theirs) : (key in remote ? theirs : local);
+    if (JSON.stringify(merged) !== JSON.stringify(local)) { store.set(key, merged, false); changed = true; }
+    if (merged != null && JSON.stringify(merged) !== JSON.stringify(theirs)) await postState(key, merged);
+  }
+  if (first) store.set("synced", true);
+  return changed;
+}
 
 const DEFAULTS = { defaultQuality: "720p", downloadProfile: "standard", autoplay: false, theme: "system" };
 const settings = () => ({ ...DEFAULTS, ...store.get("settings", {}) });
@@ -842,6 +907,16 @@ function pageSettings() {
 /* ---------------------------------------------------------------------- router */
 const NAV_KEY = { "": "feed", search: "", watch: "", channel: "", playlist: "", subs: "subs", later: "later", history: "history", downloads: "downloads", settings: "settings" };
 
+/* Pages that talk to Invidious wait for it; local pages (channels, later, history, saved, settings) never do. */
+const ENGINE_ROUTES = new Set(["", "search", "watch", "channel", "playlist"]);
+async function ensureEngine(id, name) {
+  if (engineReady || !ENGINE_ROUTES.has(name)) return true;
+  if (name === "" && store.get("feedCache", null)) return true; // the feed shows its saved copy meanwhile
+  await waitForEngine(true);
+  engineReady = true;
+  return id === renderId;
+}
+
 async function route(forceFeed) {
   const id = ++renderId;
   cleanups.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
@@ -854,6 +929,7 @@ async function route(forceFeed) {
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.r === NAV_KEY[name]));
   window.scrollTo(0, 0);
   try {
+    if (!(await ensureEngine(id, name))) return;
     if (name === "") await pageFeed(id, forceFeed === true);
     else if (name === "search") await pageSearch(id, params);
     else if (name === "watch" && parts[1]) await pageWatch(id, parts[1], params);
@@ -918,6 +994,12 @@ sg.addEventListener("pointerdown", (e) => {
   if (it) { e.preventDefault(); runSearch(it.textContent); }
 });
 window.addEventListener("hashchange", () => route());
+window.addEventListener("focus", async () => {
+  if ((await syncFromServer()) && !location.hash.startsWith("#/watch")) route();
+});
+// push any change made in the last moments before the window goes away
+window.addEventListener("pagehide", () => { flushPending(true); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushPending(true); });
 
 /* Start-up: WSL and the containers take about 15 s to boot on a cold start. */
 async function engineStatus() {
@@ -947,20 +1029,19 @@ async function waitForEngine(withSplash) {
 (async function boot() {
   applyTheme();
   try { CFG = await (await fetch("/config.json")).json(); BASE = CFG.invidious.replace(/\/$/, ""); } catch { /* keep default */ }
-  if (!(await engineStatus())) {
-    const onHome = !location.hash || location.hash === "#/" || location.hash === "#";
-    if (onHome && store.get("feedCache", null)) {
-      // There is a saved feed: show it now and let the engine finish booting behind it.
-      engineReady = false;
-      const banner = h("div", { class: "panel boot-banner" }, h("span", { class: "spin" }), "Starting the engine… thumbnails and playback appear in a few seconds.");
-      route();
-      view.before(banner);
-      await waitForEngine(false);
-      engineReady = true;
-      banner.remove();
-      return route();
-    }
-    await waitForEngine(true);
+  await syncFromServer();
+  applyTheme();
+  engineReady = await engineStatus();
+  const onHome = !location.hash || location.hash === "#/" || location.hash === "#";
+  if (!engineReady && onHome && store.get("feedCache", null)) {
+    // There is a saved feed: show it now and let the engine finish booting behind it.
+    const banner = h("div", { class: "panel boot-banner" }, h("span", { class: "spin" }), "Starting the engine… thumbnails and playback appear in a few seconds.");
+    route();
+    view.before(banner);
+    await waitForEngine(false);
+    engineReady = true;
+    banner.remove();
+    return route();
   }
   route();
 })();
