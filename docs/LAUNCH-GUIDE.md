@@ -4,18 +4,21 @@ How to start, use, stop and look after My Tube once it is installed. For the fir
 
 ## Every day
 
-### The app: MyTube.exe (recommended)
+### The app (recommended)
 
-Double-click **`dist\MyTube.exe`**. A window titled *My Tube* opens at once, shows "Starting the engine" while WSL and the containers boot (about a minute on a cold start, under half a minute when WSL is warm), then loads your feed. **Close the window to stop everything**; if a download is still running you are asked first.
+Install it once with `MyTube-Setup-<version>.exe` (from the [Releases page](https://github.com/mohameddddt/mytube-invidious/releases/latest), or build it yourself with `build-installer.bat`). It goes to `%LOCALAPPDATA%\Programs\My Tube` for your account only, and adds a Start Menu entry (and a desktop shortcut if you ticked it). Launch **My Tube** from there. To update, run a newer installer over it; to remove it, use *Settings → Apps → My Tube*, which asks whether to delete your data as well.
+
+Without installing, you can also double-click **`dist\MyTube.exe`** after `build-exe.bat`. A window titled *My Tube* opens at once, shows "Starting the engine" while WSL and the containers boot (about a minute on a cold start, under half a minute when WSL is warm), then loads your feed. **Close the window to stop everything**; if a download is still running you are asked first.
 
 - **How long it takes:** the window opens in 2 to 4 seconds. If you already have a feed, it is shown straight away from its saved copy, with a small banner while the engine boots; thumbnails and playback appear when it is ready, about 16 seconds after the click on a cold start. That time is almost all WSL's virtual machine booting (about 8 s) and Docker starting the containers (about 5 s), which nothing in this project can skip. The very first launch after building a new exe is slower, because Windows Defender scans it once.
-- **First time only:** build it with `build-exe.bat` (needs Python; PyInstaller is installed automatically). Then pin `dist\MyTube.exe` to the taskbar or make a desktop shortcut.
+- **Taskbar:** after installing, right-click My Tube in the Start Menu and choose *Pin to taskbar*.
+- **Building it yourself:** `build-installer.bat` needs Python and Inno Setup (`winget install JRSoftware.InnoSetup --scope user`). Run `powershell -File tools\make_cert.ps1 -SkipTrust` once to create the signing certificate; without it the files are simply left unsigned.
 - **Second click:** clicking it again while it runs opens another window onto the same session; closing that extra window does not stop anything.
 - **Already started with `start-yt.bat`?** The exe attaches to that session and leaves it running when you close the window.
 - **Same data as the browser:** the app and a browser tab on `http://localhost:8080` share one data file, `%LOCALAPPDATA%\MyTube\userdata.json` (subscriptions, history, watch later, settings, saved feed). Subscribe in one and it appears in the other; a window catches up when you switch back to it. The first time each connects, what it already had is merged in, so nothing is lost.
 - **A saved feed** is just the result of subscribing: open a channel, press **Subscribe**, then open **Feed**. The first load keeps a copy, and from then on every start shows that copy immediately.
 - **Logs and settings** live in `%LOCALAPPDATA%\MyTube` (`mytube.log`, and an optional `config.json`, see [below](#changing-things)).
-- **Windows warns about the exe?** It is unsigned. Choose *More info → Run anyway*, or just run `python launcher.py`, which does the same thing without an exe.
+- **Windows warns about the exe or installer?** They are signed with a self-signed certificate, which Windows does not recognise as a known publisher. Choose *More info → Run anyway*, or run `python launcher.py`, which does the same without an exe. Verify a download with the SHA-256 on the release page.
 
 ### Or in a browser tab: start-yt.bat
 

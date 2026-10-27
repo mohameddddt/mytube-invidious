@@ -31,6 +31,19 @@ Watching and downloading both use your home IP address, so hosting adds no extra
 - WSL2 with Ubuntu 24.04, and Docker Engine inside it
 - Python 3.9+, [yt-dlp](https://github.com/yt-dlp/yt-dlp), [ffmpeg](https://ffmpeg.org) and [Deno](https://deno.com) on Windows
 
+## Install
+
+Download **`MyTube-Setup-<version>.exe`** from the [latest release](https://github.com/mohameddddt/mytube-invidious/releases/latest) and run it. It installs for your user account only (no administrator rights), adds a Start Menu entry and an optional desktop shortcut, and registers an uninstaller under *Settings → Apps*. Updating is just running a newer installer over the old one. Uninstalling asks whether to delete your data too; your downloaded videos and music are never touched.
+
+The installer and the app are **signed**, with a free self-signed certificate (a commercial one costs money). That proves the files were not altered, but Windows cannot vouch for an unknown publisher, so SmartScreen may show "Windows protected your PC": choose *More info → Run anyway*. To check a download yourself:
+
+- compare its SHA-256 with `SHA256SUMS.txt` on the release (`Get-FileHash MyTube-Setup-<version>.exe`), and
+- look at *Properties → Digital Signatures*: the signer is `CN=My Tube, O=mohameddddt`, certificate thumbprint `308F38A21B22C31059FC072641361D423FF4A3AF`.
+
+To make Windows show the signature as valid on your own PC, install `mytube-signing.cer` (attached to the release) into *Current User → Trusted Root Certification Authorities* yourself. Only do that if you trust this project, since it makes Windows trust anything signed with that key for your account.
+
+The app is a launcher, so Invidious, WSL, Docker and yt-dlp must be set up on the PC (see the [launch guide](docs/LAUNCH-GUIDE.md#first-time-setup-on-a-new-pc)).
+
 ## Quick start
 
 **Already installed?** Double-click **`dist\MyTube.exe`** (build it once with `build-exe.bat`). It starts everything and opens My Tube in its own window; closing the window stops everything. Prefer a browser tab? Double-click `start-yt.bat` instead, and `stop-yt.bat` when you finish.
@@ -56,7 +69,7 @@ wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh   # Invidious + companion 
 
 Closing the window stops everything it started and returns all of WSL's memory. If a download is still running it asks first.
 
-Build it with `build-exe.bat`, which installs PyInstaller on first use and writes `dist\MyTube.exe`. The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
+Build just the exe with `build-exe.bat` (writes `dist\MyTube.exe`), or the signed installer with `build-installer.bat` (writes `dist\MyTube-Setup-<version>.exe`; it needs [Inno Setup](https://jrsoftware.org/isinfo.php), `winget install JRSoftware.InnoSetup --scope user`, and signs with the certificate from `tools\make_cert.ps1`). The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
 
 **The app and the browser always match.** Your subscriptions, history, watch-later list, settings and saved feed are stored in one file on the PC, `%LOCALAPPDATA%\MyTube\userdata.json`, behind the local server. The app window, a browser tab on `http://localhost:8080` and any other browser all read and write that same file, so a channel you subscribe to in one shows up in the others (a window refreshes when you switch back to it). The first time a browser or the app connects, whatever it already had is merged in, so nothing is lost.
 
@@ -74,11 +87,14 @@ launcher.py               desktop launcher, packaged as MyTube.exe (starts the s
 server.py                 local backend: serves the UI, proxies Invidious, runs yt-dlp jobs
 web/                      the interface (index.html, style.css, app.js), no build step
 build-exe.bat             build dist\MyTube.exe (PyInstaller)
+build-installer.bat       build the signed installer dist\MyTube-Setup-<version>.exe
+VERSION                   the version number used by the exe, the installer and the release
+installer/                Inno Setup script for the installer
 start-yt.bat              start everything on demand, in a browser tab
 stop-yt.bat               stop everything and free all WSL memory
 update-yt.bat             update Invidious, companion, yt-dlp, Deno and ffmpeg
 deploy/                   compose template and the script that installs Invidious in WSL
-tools/, assets/           build helpers and the app icon
+tools/, assets/           build helpers (icon, version info, certificate, signing) and the app icon and public certificate
 docs/                     build guide and launch guide
 ```
 
