@@ -243,10 +243,11 @@ async function openFolder(kind) {
   } catch { toast("Cannot reach the local server."); }
 }
 
-function openDownloadDialog({ id, playlist, title }) {
+function openDownloadDialog({ id, playlist, title, count }) {
   const cfg = settings();
   let kind = cfg.downloadProfile === "audio" ? "audio" : "video";
   let quality = DL_VIDEO.some(([k]) => k === cfg.downloadProfile) ? cfg.downloadProfile : "standard";
+  let limit = "";
   const dlg = h("dialog", { class: "modal", "aria-label": "Download" });
   const body = h("div", { class: "modal-body" });
   dlg.append(body);
@@ -264,18 +265,21 @@ function openDownloadDialog({ id, playlist, title }) {
       title ? h("p", { class: "modal-sub", text: title }) : null,
       seg,
       h("div", { class: "choices" }, choices),
+      playlist ? h("div", { class: "row limitrow" }, h("span", { class: "muted small", text: "Videos to download" }),
+        dropdown({ label: "Videos to download", value: limit, onChange: (v) => { limit = v; },
+          options: [["", count ? `All ${count} videos` : "All videos"], ...[10, 25, 50, 100].filter((n) => !count || n < count).map((n) => [String(n), `First ${n}`])] })) : null,
       h("div", { class: "pathbox" },
         h("span", { class: "muted small", text: "Saves to" }),
         h("code", { text: folder }),
         h("button", { type: "button", class: "btn small", text: "Open folder", onclick: () => openFolder(kind) })),
-      h("p", { class: "muted small", text: (playlist ? "Every video in the playlist is saved; ones you already have are skipped. " : "") + "The file is stored on this PC and also appears under Saved in this app, where you can play it or save another copy." }),
+      h("p", { class: "muted small", text: (playlist ? "Videos you already downloaded in this kind (video or audio) are skipped, and unavailable ones are passed over. " : "") + "The file is stored on this PC and also appears under Saved in this app, where you can play it or save another copy." }),
       h("div", { class: "row modal-actions" },
         h("span", { class: "spacer" }),
         h("button", { type: "button", class: "btn", text: "Cancel", onclick: () => dlg.close() }),
         h("button", { type: "button", class: "btn primary", text: "Download", onclick: async (e) => {
           e.target.disabled = true;
           const profile = kind === "audio" ? "audio" : quality;
-          if (await startDownload(playlist ? { playlist, profile } : { id, profile })) {
+          if (await startDownload(playlist ? { playlist, profile, title, limit: limit ? Number(limit) : undefined } : { id, profile, title })) {
             store.set("settings", { ...settings(), downloadProfile: profile });
             libraryCache = null;
             dlg.close();
@@ -329,6 +333,9 @@ function channelItem(c) {
       h("div", { class: "muted small", text: (c.description || "").slice(0, 160) })));
 }
 
+/* YouTube "Mix" playlists (IDs starting with RD) are endless and cannot be downloaded. */
+const isMix = (plid) => /^RD/.test(plid);
+
 function playlistItem(p) {
   const first = p.playlistThumbnail || null;
   return h("div", { class: "item" },
@@ -337,7 +344,9 @@ function playlistItem(p) {
       h("span", { class: "badge", text: (p.videoCount || "") + " videos" })),
     h("div", { class: "body" },
       h("a", { class: "title", href: "#/playlist/" + p.playlistId, text: p.title }),
-      h("div", { class: "muted small", text: p.author || "" })));
+      h("div", { class: "muted small", text: p.author || "" }),
+      isMix(p.playlistId) ? null : h("button", { class: "btn small", style: "margin-top:8px", text: "Download playlist",
+        onclick: () => openDownloadDialog({ playlist: p.playlistId, title: p.title, count: p.videoCount }) })));
 }
 
 function resultItem(r) {
@@ -480,7 +489,7 @@ async function pagePlaylist(id, plid, params) {
   const page = Number(params.get("page") || 1);
   const data = await api(`playlists/${enc(plid)}?page=${page}`);
   if (id !== renderId) return;
-  const dlBtn = h("button", { class: "btn", text: "Download all", onclick: () => openDownloadDialog({ playlist: plid, title: data.title }) });
+  const dlBtn = isMix(plid) ? null : h("button", { class: "btn primary", text: "Download playlist", onclick: () => openDownloadDialog({ playlist: plid, title: data.title, count: data.videoCount }) });
   const vids = (data.videos || []).map((v) => h("div", { class: "card" },
     thumbBox(`#/watch/${v.videoId}?list=${enc(plid)}`, v.videoId, v.lengthSeconds),
     h("a", { class: "title", href: `#/watch/${v.videoId}?list=${enc(plid)}`, text: v.title }),
@@ -488,7 +497,7 @@ async function pagePlaylist(id, plid, params) {
   view.replaceChildren(
     h("div", { class: "row" }, h("h1", { text: data.title }), h("span", { class: "spacer" }), dlBtn),
     h("p", { class: "muted small", text: [data.author, data.videoCount ? data.videoCount + " videos" : ""].filter(Boolean).join(" · ") }),
-    vids.length ? h("div", { class: "grid" }, vids) : h("p", { class: "empty", text: "No videos on this page." }),
+    vids.length ? h("div", { class: "grid" }, vids) : h("p", { class: "empty", text: page > 1 ? "No more videos." : "Invidious can't list the videos of this playlist (common with Shorts-only playlists). You can still download it." }),
     h("div", { class: "row", style: "margin-top:16px" },
       page > 1 ? h("a", { class: "btn", href: `#/playlist/${plid}?page=${page - 1}`, text: "Previous" }) : null,
       vids.length >= 100 ? h("a", { class: "btn", href: `#/playlist/${plid}?page=${page + 1}`, text: "Next" }) : null));
@@ -649,10 +658,15 @@ async function pageWatch(id, vid, params) {
       api(`playlists/${enc(list)}`).then((pl) => {
         const vids = pl.videos || [];
         const i = vids.findIndex((v) => v.videoId === vid);
+        const box = h("div", { class: "panel", style: "margin-bottom:6px" }, h("strong", { text: pl.title || "Playlist" }));
         if (i >= 0 && vids[i + 1]) {
           nextHref = `#/watch/${vids[i + 1].videoId}?list=${enc(list)}`;
-          right.prepend(h("p", { class: "small" }, "Next in playlist: ", h("a", { href: nextHref, text: vids[i + 1].title })));
+          box.append(h("p", { class: "small", style: "margin:6px 0" }, "Next: ", h("a", { href: nextHref, text: vids[i + 1].title })));
         }
+        box.append(h("div", { class: "row", style: "margin-top:8px" },
+          h("a", { class: "btn small", href: "#/playlist/" + list, text: "Open playlist" }),
+          isMix(list) ? null : h("button", { class: "btn small", text: "Download playlist", onclick: () => openDownloadDialog({ playlist: list, title: pl.title, count: pl.videoCount }) })));
+        right.prepend(box);
       }).catch(() => {});
     }
 
@@ -717,7 +731,7 @@ async function pageDownloads(id) {
     h("div", { class: "row" }, h("strong", { text: n }), h("code", { text: p || "" }), h("span", { class: "spacer" }), h("button", { class: "btn small", text: "Open folder", onclick: () => openFolder(k) }))));
   view.append(h("p", { class: "lead", text: "Everything you download is stored on this PC, and listed here so you can play it in the app." }), folders,
     h("h2", { text: "Downloading" }), jobsBox, h("h2", { text: "Library" }), libBox);
-  let timer = null, lastActive = -1;
+  let timer = null, lastActive = -1, lastSig = null;
   const stop = () => clearTimeout(timer);
   cleanups.push(stop);
   const tick = async () => {
@@ -726,13 +740,27 @@ async function pageDownloads(id) {
       if (id !== renderId) return;
       const active = jobs.filter((j) => j.status === "queued" || j.status === "running").length;
       jobsBox.replaceChildren(jobs.length ? h("table", {},
-        h("thead", {}, h("tr", {}, ["Item", "Profile", "Status", "Progress"].map((t) => h("th", { text: t })))),
-        h("tbody", {}, jobs.map((j) => h("tr", {},
-          h("td", {}, j.kind === "playlist" ? "Playlist " + j.target : h("a", { href: "#/watch/" + j.target, text: j.target })),
-          h("td", { text: PROFILE_LABEL[j.profile] || j.profile }),
-          h("td", { class: j.status === "error" ? "stat-err" : "", text: j.status === "error" ? "failed: " + (j.error || "") : j.status }),
-          h("td", {}, j.status === "running" || j.status === "done" ? h("progress", { max: 100, value: j.percent || 0 }) : null))))) : h("p", { class: "muted", text: "No jobs in this session." }));
-      if (active < lastActive || lastActive === -1) await paintLibrary();
+        h("thead", {}, h("tr", {}, ["Item", "Format", "Status", "Progress", ""].map((t) => h("th", { text: t })))),
+        h("tbody", {}, jobs.map((j) => {
+          const live = j.status === "queued" || j.status === "running";
+          const name = j.title || (j.kind === "playlist" ? "Playlist " + j.target : j.target);
+          const status = j.status === "error" ? "failed: " + (j.error || "")
+            : j.status === "running" && j.kind === "playlist" ? (j.total ? `video ${j.index} of ${j.total}` : "reading playlist…")
+            : j.status === "done" && j.message ? "done · " + j.message : j.status;
+          return h("tr", {},
+            h("td", {}, h("a", { href: (j.kind === "playlist" ? "#/playlist/" : "#/watch/") + j.target, text: name }),
+              j.kind === "playlist" ? h("div", { class: "muted small", text: "Playlist" + (j.limit ? ", first " + j.limit : "") }) : null),
+            h("td", { text: PROFILE_LABEL[j.profile] || j.profile }),
+            h("td", { class: j.status === "error" ? "stat-err" : "", text: status }),
+            h("td", {}, j.status === "running" || j.status === "done" ? h("progress", { max: 100, value: (j.kind === "playlist" ? j.overall : j.percent) || 0 }) : null),
+            h("td", {}, live ? h("button", { class: "btn small", text: "Cancel", onclick: async () => {
+              await fetch("/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job: j.id }) }).catch(() => {});
+              clearTimeout(timer);
+              tick();
+            } }) : null));
+        }))) : h("p", { class: "muted", text: "No jobs in this session." }));
+      const sig = jobs.map((j) => j.index + ":" + j.status).join();
+      if (sig !== lastSig) { lastSig = sig; await paintLibrary(); } // a new file landed
       lastActive = active;
       timer = setTimeout(tick, active ? 2000 : 6000);
     } catch (e) { jobsBox.replaceChildren(h("p", { class: "error", text: "Cannot reach the local server." })); }

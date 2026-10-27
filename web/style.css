@@ -190,3 +190,8 @@ dialog.modal::backdrop { background: rgba(8, 6, 4, .66); }
 .folders code { flex: 0 1 auto; color: var(--muted); }
 .modal-actions { margin-top: 18px; }
 .btn.small { padding: 4px 12px; font-size: 13px; }
+
+/* ---- playlist options ---- */
+dialog.modal { overflow: visible; }
+.limitrow { justify-content: space-between; margin-top: 14px; }
+.item .btn.small { margin-top: 8px; }
