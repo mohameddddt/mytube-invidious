@@ -905,8 +905,33 @@ sg.addEventListener("pointerdown", (e) => {
 });
 window.addEventListener("hashchange", () => route());
 
+/* Start-up screen: shown while WSL and the containers are still booting (about a minute on a cold start). */
+async function waitForEngine() {
+  const started = Date.now();
+  let slow = null, skip = false;
+  for (;;) {
+    try {
+      const st = await (await fetch("/status")).json();
+      if (st.invidious) return;
+    } catch { return; } // backend without /status: just carry on
+    if (!slow) {
+      slow = h("div", { class: "muted small", hidden: true, style: "margin-top:14px" },
+        h("p", { text: "Still waiting. Make sure WSL and Docker started (see the launch guide)." }),
+        h("button", { class: "btn", text: "Continue anyway", onclick: () => { skip = true; } }));
+      view.replaceChildren(h("div", { class: "empty splash" },
+        h("p", {}, h("span", { class: "spin" }), "Starting the engine…"),
+        h("p", { class: "small", style: "font-family:system-ui,sans-serif", text: "Booting WSL and the Invidious containers. This takes about a minute on a cold start." }),
+        slow));
+    }
+    if (Date.now() - started > 90000) slow.hidden = false;
+    if (skip) return;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
 (async function boot() {
   applyTheme();
   try { CFG = await (await fetch("/config.json")).json(); BASE = CFG.invidious.replace(/\/$/, ""); } catch { /* keep default */ }
+  await waitForEngine();
   route();
 })();
