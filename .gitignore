@@ -1,5 +1,5 @@
-# yt-dlp archive created by playlist downloads
-archive.txt
+# yt-dlp archives created by playlist downloads (one for video, one for audio)
+archive*.txt
 
 # secrets and local state: never commit
 .env

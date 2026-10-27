@@ -6,7 +6,8 @@ Routes
   GET  /                 static UI from ./web
   GET  /config.json      addresses the UI needs (Invidious base, companion)
   GET  /api/*            forwarded to Invidious /api/v1/*
-  POST /download         {id, profile} or {playlist, profile} -> 202, runs yt-dlp
+  POST /download         {id | playlist, profile, title?, limit?} -> 202, runs yt-dlp
+  POST /cancel           {job} stops a queued or running download
   POST /open-folder      {kind: "video"|"audio"} opens that download folder in Explorer (local PC only)
   GET  /jobs             status of download jobs
   GET  /downloads        files in the download folders
@@ -33,7 +34,11 @@ WEB = ROOT / "web"
 HOME = Path(os.environ.get("USERPROFILE", str(Path.home())))
 VIDEO_DIR = HOME / "Videos" / "yt"
 AUDIO_DIR = HOME / "Music" / "yt"
-ARCHIVE = ROOT / "archive.txt"
+
+
+def archive_for(profile):
+    """yt-dlp archive file per kind, so an audio run never makes a later video run skip everything."""
+    return ROOT / ("archive-audio.txt" if PROFILES[profile]["dir"] == AUDIO_DIR else "archive-video.txt")
 
 BIND = os.environ.get("YT_BIND", "127.0.0.1")
 PORT = int(os.environ.get("YT_PORT", "8080"))
@@ -57,7 +62,10 @@ PROFILES = {
 }
 
 jobs = {}
+procs = {}  # job id -> running yt-dlp process (kept apart from `jobs`, which is sent to the UI as JSON)
 jobs_lock = threading.Lock()
+ITEM_RE = re.compile(r"Downloading item (\d+) of (\d+)")
+MAX_LIMIT = 500
 executor = ThreadPoolExecutor(max_workers=MAX_JOBS)
 
 
@@ -77,19 +85,47 @@ def find_ytdlp(env):
     return shutil.which("yt-dlp", path=env["PATH"])
 
 
+def clean_title(value):
+    """Display-only text for the jobs list. It never reaches a command line."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[\x00-\x1f\x7f]", "", value).strip()[:120]
+
+
+def kill_tree(pid):
+    if sys.platform == "win32":  # also stops the ffmpeg child
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        os.kill(pid, 15)
+
+
+def finish(job, **changes):
+    """Apply a final state unless the user cancelled in the meantime."""
+    with jobs_lock:
+        if job["status"] != "cancelled":
+            job.update(changes)
+        job["finished"] = time.time()
+
+
 def run_job(job_id):
     job = jobs[job_id]
+    if job["status"] == "cancelled":  # cancelled while it was still queued
+        return
     env = tool_env()
     exe = find_ytdlp(env)
     if not exe:
-        job.update(status="error", error="yt-dlp not found on PATH")
-        return
+        return finish(job, status="error", error="yt-dlp not found on PATH")
     profile = PROFILES[job["profile"]]
     profile["dir"].mkdir(parents=True, exist_ok=True)
     cmd = [exe, *profile["args"], *COMMON, "-P", str(profile["dir"]),
            "--progress-template", "download:PCT %(progress._percent_str)s"]
-    if job["kind"] == "playlist":
-        cmd += ["--download-archive", str(ARCHIVE), "--yes-playlist"]
+    playlist = job["kind"] == "playlist"
+    if playlist:
+        # --ignore-errors: one private or deleted video must not stop the rest
+        cmd += ["--download-archive", str(archive_for(job["profile"])), "--yes-playlist", "--ignore-errors"]
+        if job["limit"]:
+            cmd += ["--playlist-end", str(job["limit"])]
         url = "https://www.youtube.com/playlist?list=" + job["target"]
     else:
         cmd += ["--no-playlist"]
@@ -100,6 +136,9 @@ def run_job(job_id):
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace", env=env, creationflags=flags)
+        procs[job_id] = proc
+        if job["status"] == "cancelled":  # cancel arrived while the process was starting
+            kill_tree(proc.pid)
         tail = []
         for line in proc.stdout:
             line = line.strip()
@@ -107,32 +146,68 @@ def run_job(job_id):
                 m = re.search(r"([\d.]+)%", line)
                 if m:
                     job["percent"] = float(m.group(1))
-            elif line:
-                tail.append(line)
+            else:
+                m = ITEM_RE.search(line)
+                if m:
+                    job["index"], job["total"], job["percent"] = int(m.group(1)), int(m.group(2)), 0.0
+                elif "already been recorded in the archive" in line:
+                    job["skipped"] += 1
+                elif line.startswith("ERROR:"):
+                    job["failed"] += 1
+                    tail.append(line)
+                elif line:
+                    tail.append(line)
                 tail = tail[-6:]
+            if playlist and job["total"]:
+                job["overall"] = round(((job["index"] - 1) + job["percent"] / 100) / job["total"] * 100, 1)
         proc.wait()
-        if proc.returncode == 0:
-            job.update(status="done", percent=100.0)
+        procs.pop(job_id, None)
+        saved = max(0, job["index"] - job["failed"] - job["skipped"])
+        if playlist:
+            parts = [f"{saved} saved"]
+            if job["skipped"]:
+                parts.append(f"{job['skipped']} already downloaded")
+            if job["failed"]:
+                parts.append(f"{job['failed']} unavailable")
+            job["message"] = ", ".join(parts)
+        if proc.returncode == 0 or (playlist and (saved > 0 or job["skipped"] > 0)):
+            finish(job, status="done", percent=100.0, overall=100.0)
         else:
-            job.update(status="error", error=" | ".join(tail[-3:])[:400] or f"yt-dlp exit {proc.returncode}")
+            finish(job, status="error", error=" | ".join(tail[-3:])[:400] or f"yt-dlp exit {proc.returncode}")
     except Exception as exc:  # noqa: BLE001 - report any launch failure to the UI
-        job.update(status="error", error=str(exc)[:400])
-    job["finished"] = time.time()
+        procs.pop(job_id, None)
+        finish(job, status="error", error=str(exc)[:400])
 
 
-def start_job(kind, target, profile):
+def start_job(kind, target, profile, title="", limit=None):
     with jobs_lock:
         for j in jobs.values():  # don't queue the same thing twice
-            if j["target"] == target and j["profile"] == profile and j["status"] in ("queued", "running"):
+            if (j["target"] == target and j["profile"] == profile and j["limit"] == limit
+                    and j["status"] in ("queued", "running")):
                 return j["id"]
         job_id = f"{int(time.time() * 1000)}"
-        jobs[job_id] = {"id": job_id, "kind": kind, "target": target, "profile": profile,
-                        "status": "queued", "percent": 0.0, "error": None, "created": time.time()}
+        jobs[job_id] = {"id": job_id, "kind": kind, "target": target, "profile": profile, "title": title,
+                        "limit": limit, "status": "queued", "percent": 0.0, "overall": 0.0, "index": 0,
+                        "total": 0, "skipped": 0, "failed": 0, "message": "", "error": None,
+                        "created": time.time()}
         for old in sorted(jobs)[:-50]:  # keep the list short
-            if jobs[old]["status"] in ("done", "error"):
+            if jobs[old]["status"] in ("done", "error", "cancelled"):
                 del jobs[old]
     executor.submit(run_job, job_id)
     return job_id
+
+
+def cancel_job(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job or job["status"] not in ("queued", "running"):
+            return False
+        job["status"] = "cancelled"
+        job["finished"] = time.time()
+    proc = procs.get(job_id)
+    if proc and proc.poll() is None:
+        kill_tree(proc.pid)
+    return True
 
 
 def list_downloads():
@@ -233,7 +308,7 @@ class Handler(BaseHTTPRequestHandler):
         if origin and urlsplit(origin).netloc.lower() != (self.headers.get("Host") or "").lower():
             return self.send_error_json(403, "cross-origin request refused")
         path = urlsplit(self.path).path
-        if path not in ("/download", "/open-folder"):
+        if path not in ("/download", "/open-folder", "/cancel"):
             return self.send_error_json(404, "not found")
         if "application/json" not in (self.headers.get("Content-Type") or ""):
             return self.send_error_json(415, "expected application/json")
@@ -244,6 +319,13 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self.send_error_json(400, "bad request body")
+        if path == "/cancel":
+            job_id = data.get("job") if isinstance(data, dict) else None
+            if not (isinstance(job_id, str) and re.fullmatch(r"\d{10,16}", job_id)):
+                return self.send_error_json(400, "invalid job")
+            if not cancel_job(job_id):
+                return self.send_error_json(404, "no such running job")
+            return self.send_json({"cancelled": True})
         if path == "/open-folder":
             if self.client_address[0] not in ("127.0.0.1", "::1"):
                 return self.send_error_json(403, "only available on the PC itself")
@@ -256,10 +338,16 @@ class Handler(BaseHTTPRequestHandler):
         if profile not in PROFILES:
             return self.send_error_json(400, "unknown profile")
         vid, pl = data.get("id"), data.get("playlist")
+        title = clean_title(data.get("title"))
         if isinstance(vid, str) and ID_RE.match(vid):
-            job_id = start_job("video", vid, profile)
+            job_id = start_job("video", vid, profile, title)
         elif isinstance(pl, str) and PLAYLIST_RE.match(pl):
-            job_id = start_job("playlist", pl, profile)
+            if pl.startswith("RD"):
+                return self.send_error_json(400, "YouTube Mix playlists are endless and cannot be downloaded. Open a normal playlist instead.")
+            limit = data.get("limit")
+            if limit is not None and not (isinstance(limit, int) and not isinstance(limit, bool) and 1 <= limit <= MAX_LIMIT):
+                return self.send_error_json(400, f"limit must be a whole number from 1 to {MAX_LIMIT}")
+            job_id = start_job("playlist", pl, profile, title, limit)
         else:
             return self.send_error_json(400, "invalid video or playlist id")
         self.send_json({"accepted": True, "job": job_id}, 202)
