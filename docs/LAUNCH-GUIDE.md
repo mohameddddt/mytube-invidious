@@ -12,7 +12,8 @@ Double-click **`dist\MyTube.exe`**. A window titled *My Tube* opens at once, sho
 - **First time only:** build it with `build-exe.bat` (needs Python; PyInstaller is installed automatically). Then pin `dist\MyTube.exe` to the taskbar or make a desktop shortcut.
 - **Second click:** clicking it again while it runs opens another window onto the same session; closing that extra window does not stop anything.
 - **Already started with `start-yt.bat`?** The exe attaches to that session and leaves it running when you close the window.
-- **Its own data:** the app window keeps its subscriptions and history separately from your browser. Move them with **Settings → Export JSON** in the browser and **Import JSON** in the app.
+- **Same data as the browser:** the app and a browser tab on `http://localhost:8080` share one data file, `%LOCALAPPDATA%\MyTube\userdata.json` (subscriptions, history, watch later, settings, saved feed). Subscribe in one and it appears in the other; a window catches up when you switch back to it. The first time each connects, what it already had is merged in, so nothing is lost.
+- **A saved feed** is just the result of subscribing: open a channel, press **Subscribe**, then open **Feed**. The first load keeps a copy, and from then on every start shows that copy immediately.
 - **Logs and settings** live in `%LOCALAPPDATA%\MyTube` (`mytube.log`, and an optional `config.json`, see [below](#changing-things)).
 - **Windows warns about the exe?** It is unsigned. Choose *More info → Run anyway*, or just run `python launcher.py`, which does the same thing without an exe.
 
@@ -58,7 +59,7 @@ Downloads are stored on this PC:
 
 - Progress shows as `video 4 of 10` with an overall bar on the **Saved** page, and files appear in your library as each one finishes.
 - **Cancel** stops the job at once. Files already finished are kept, and a half-downloaded file resumes next time.
-- Videos you already downloaded in the same kind (video or audio) are skipped, tracked in `archive-video.txt` and `archive-audio.txt` next to `server.py`. Delete the matching file if you really want to download everything again.
+- Videos you already downloaded in the same kind (video or audio) are skipped, tracked in `archive-video.txt` and `archive-audio.txt` in `%LOCALAPPDATA%\MyTube`. Delete the matching file if you really want to download everything again.
 - Unavailable videos (private, deleted, region-blocked) are passed over, and the job says how many.
 - YouTube *Mix* playlists (their address contains `list=RD...`) are endless and cannot be downloaded.
 - Two jobs run at a time; the rest wait in the queue.
@@ -104,7 +105,7 @@ wsl -d Ubuntu-24.04 -- docker compose -f ~/invidious/compose.yaml ps            
 | When | What |
 |---|---|
 | Weekly, or as soon as playback or downloads break | Run **`update-yt.bat`** with the stack running. It updates Invidious and companion, yt-dlp, Deno and ffmpeg. |
-| Monthly | **Settings → Export JSON**. Your subscriptions, history and watch-later list live only in your browser, so this file is your backup. Restore it with **Import JSON**. |
+| Monthly | Copy `%LOCALAPPDATA%\MyTube\userdata.json` somewhere safe (or **Settings → Export JSON**). That one file holds your subscriptions, history, watch-later list and settings. Restore it by copying it back, or with **Import JSON**. |
 | Occasionally | `wsl -d Ubuntu-24.04 -- sudo apt update` then `sudo apt full-upgrade -y` to update Ubuntu. |
 
 YouTube changes often. When something stops working, updating is the first fix, as it is for almost every Invidious and yt-dlp problem.

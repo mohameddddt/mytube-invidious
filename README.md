@@ -58,7 +58,7 @@ Closing the window stops everything it started and returns all of WSL's memory. 
 
 Build it with `build-exe.bat`, which installs PyInstaller on first use and writes `dist\MyTube.exe`. The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
 
-The app window keeps its own subscriptions, history and settings. To bring them over from a browser, use **Settings → Export JSON** there and **Import JSON** in the app.
+**The app and the browser always match.** Your subscriptions, history, watch-later list, settings and saved feed are stored in one file on the PC, `%LOCALAPPDATA%\MyTube\userdata.json`, behind the local server. The app window, a browser tab on `http://localhost:8080` and any other browser all read and write that same file, so a channel you subscribe to in one shows up in the others (a window refreshes when you switch back to it). The first time a browser or the app connects, whatever it already had is merged in, so nothing is lost.
 
 ## Documentation
 
@@ -99,7 +99,7 @@ Download profiles are fixed (`data_saver`, `standard`, `high`, `audio`), video I
 
 ## Keeping it working
 
-YouTube changes constantly. Run `update-yt.bat` weekly, and straight away if playback or downloads break. Back up your subscriptions with **Settings → Export JSON**.
+YouTube changes constantly. Run `update-yt.bat` weekly, and straight away if playback or downloads break. Back up your data by copying `%LOCALAPPDATA%\MyTube\userdata.json`, or with **Settings → Export JSON**.
 
 ## Legal
 
