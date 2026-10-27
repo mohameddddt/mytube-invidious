@@ -8,6 +8,7 @@ How to start, use, stop and look after My Tube once it is installed. For the fir
 
 Double-click **`dist\MyTube.exe`**. A window titled *My Tube* opens at once, shows "Starting the engine" while WSL and the containers boot (about a minute on a cold start, under half a minute when WSL is warm), then loads your feed. **Close the window to stop everything**; if a download is still running you are asked first.
 
+- **How long it takes:** the window opens in 2 to 4 seconds. If you already have a feed, it is shown straight away from its saved copy, with a small banner while the engine boots; thumbnails and playback appear when it is ready, about 16 seconds after the click on a cold start. That time is almost all WSL's virtual machine booting (about 8 s) and Docker starting the containers (about 5 s), which nothing in this project can skip. The very first launch after building a new exe is slower, because Windows Defender scans it once.
 - **First time only:** build it with `build-exe.bat` (needs Python; PyInstaller is installed automatically). Then pin `dist\MyTube.exe` to the taskbar or make a desktop shortcut.
 - **Second click:** clicking it again while it runs opens another window onto the same session; closing that extra window does not stop anything.
 - **Already started with `start-yt.bat`?** The exe attaches to that session and leaves it running when you close the window.
