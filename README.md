@@ -11,6 +11,7 @@ Everything runs on your own machine, costs nothing, and shuts down completely wh
 - **Search and watch** with suggestions, filters (type, sort, date, length) and an adaptive player that falls back from your downloaded file, to DASH (480p to 1080p), to a 360p stream, to the embedded player.
 - **Subscriptions without an account.** The feed is built on demand from your channels and cached for 20 minutes. History, watch later and settings live in your browser, with JSON export and import as backup.
 - **Downloads that land on your PC.** Choose Video (480p, 720p, 1080p) or Audio only (MP3), see exactly where it will be saved, and find the file again in the app's **Saved** page. Play it offline, save another copy, or open its folder in Explorer.
+- **Whole playlists.** Download a playlist from its page, from a search result, or from the video you are watching. Pick all of it or just the first 10, 25, 50 or 100 videos, follow per-video progress, and cancel at any time. Videos you already have are skipped and unavailable ones are passed over.
 - **Light by design.** No frameworks, no build step, no web fonts. The backend is one Python file using only the standard library. Containers have memory caps, and Invidious's background crawlers are turned off.
 - **Private.** Every service listens on `127.0.0.1` only. Avatars and thumbnails go through Invidious, so your browser never talks to Google directly.
 
@@ -38,7 +39,7 @@ Watching and downloading both use your home IP address, so hosting adds no extra
 
 ```powershell
 winget install Python.Python.3.12 Gyan.FFmpeg DenoLand.Deno
-python -m pip install -U yt-dlp
+python -m pip install -U "yt-dlp[default]"
 git clone https://github.com/mohameddddt/mytube-invidious.git
 cd mytube-invidious
 wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh   # Invidious + companion + Postgres, keys generated for you
@@ -70,8 +71,9 @@ docs/                     build guide and launch guide
 |---|---|
 | `GET /` | the UI |
 | `GET /api/*` | forwarded to Invidious `/api/v1/*` |
-| `POST /download` | `{id, profile}` or `{playlist, profile}`, starts a yt-dlp job, returns 202 |
-| `GET /jobs` | progress of download jobs |
+| `POST /download` | `{id, profile}` or `{playlist, profile, limit?}` (plus an optional display `title`), starts a yt-dlp job, returns 202 |
+| `GET /jobs` | progress of download jobs, including per-video progress for playlists |
+| `POST /cancel` | `{job}` stops a queued or running download |
 | `GET /downloads` | files in your download folders |
 | `GET /files/<name>` | a downloaded file, with Range support for seeking |
 | `POST /open-folder` | opens a download folder in Explorer (the PC itself only) |

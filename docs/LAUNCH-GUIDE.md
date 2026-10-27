@@ -29,6 +29,7 @@ Nothing starts by itself with Windows, so after a reboot you simply run `start-y
 | Follow a channel | Open the channel and press **Subscribe**. The **Feed** page shows their newest videos. |
 | Watch | Click a video. Playback quality follows **Settings → Playback quality** and falls back automatically if a stream fails. |
 | Download | Press **Download** on a video, choose **Video** (480p / 720p / 1080p) or **Audio only** (MP3), check the path shown, press **Download**. |
+| Download a playlist | Press **Download playlist** on a playlist page, on a playlist in the search results (filter by *Playlists*), or in the playlist panel beside a video you opened from one. Choose the format, then **Videos to download**: all of it, or the first 10 / 25 / 50 / 100. |
 | See downloads | **Saved** shows running jobs and your library. **Play** plays a file in the app, **Save copy** saves another copy through the browser, **Open folder** opens it in Explorer. |
 | Watch offline | Videos in your library play from disk with no network use. |
 
@@ -38,6 +39,15 @@ Downloads are stored on this PC:
 |---|---|
 | Video | `%USERPROFILE%\Videos\yt` |
 | Audio | `%USERPROFILE%\Music\yt` |
+
+### Playlist downloads in detail
+
+- Progress shows as `video 4 of 10` with an overall bar on the **Saved** page, and files appear in your library as each one finishes.
+- **Cancel** stops the job at once. Files already finished are kept, and a half-downloaded file resumes next time.
+- Videos you already downloaded in the same kind (video or audio) are skipped, tracked in `archive-video.txt` and `archive-audio.txt` next to `server.py`. Delete the matching file if you really want to download everything again.
+- Unavailable videos (private, deleted, region-blocked) are passed over, and the job says how many.
+- YouTube *Mix* playlists (their address contains `list=RD...`) are endless and cannot be downloaded.
+- Two jobs run at a time; the rest wait in the queue.
 
 ### 3. Stop it
 
@@ -92,7 +102,7 @@ YouTube changes often. When something stops working, updating is the first fix, 
 | The page loads but says "Invidious unreachable" | The containers are still starting (give it a minute) or WSL went idle. Run `start-yt.bat` again. |
 | Search works, video won't play | Run `update-yt.bat`. Then check `wsl -d Ubuntu-24.04 -- docker compose -f ~/invidious/compose.yaml logs --tail 50 companion`. |
 | Video takes several seconds to start at 720p/1080p | Normal: the adaptive manifest is generated on demand. Choose 360p in Settings for the fastest start. |
-| Download fails with `HTTP Error 403` | yt-dlp is out of date. Run `update-yt.bat` (or `python -m pip install -U yt-dlp`). |
+| Download fails with `HTTP Error 403` | yt-dlp is out of date. Run `update-yt.bat` (or `python -m pip install -U "yt-dlp[default]"`). |
 | "Sign in to confirm you're not a bot" | Update everything. If it persists, restart your router to get a new IP address. |
 | `start-yt.bat` opens the browser but the page is blank | Another program uses port 8080. Close it, or start the server on another port: `set YT_PORT=8090` then `python server.py`. |
 | Containers stop on their own | The `yt-wsl` window was closed. Start again with `start-yt.bat`. |
@@ -111,7 +121,7 @@ Short version; every step is explained in [BUILD-GUIDE.md](BUILD-GUIDE.md).
    winget install Python.Python.3.12
    winget install Gyan.FFmpeg
    winget install DenoLand.Deno
-   python -m pip install -U yt-dlp
+   python -m pip install -U "yt-dlp[default]"
    ```
 5. Clone this repository, then set up Invidious in WSL with the included script (it generates the secret keys for you):
    ```powershell

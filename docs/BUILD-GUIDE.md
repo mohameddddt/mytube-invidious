@@ -681,6 +681,8 @@ Everything except the optional Phase 7 is built and checked. Deviations from the
 | Compose file | Lives at `~/invidious/compose.yaml` (untracked) instead of overwriting the repo's `docker-compose.yml`, so `git pull` in §13.1 never conflicts. `.env` pins `COMPOSE_FILE=compose.yaml`. The real keys exist only there; `deploy/compose.template.yml` has placeholders, and `deploy/setup-invidious.sh` fills them in. |
 | Compose tweak | Added the official Postgres healthcheck and `depends_on: service_healthy`, so Invidious never races the database. |
 | yt-dlp | Already installed through pip (miniconda). Update it with `python -m pip install -U yt-dlp`; `winget upgrade yt-dlp.yt-dlp` does not apply. `update-yt.bat` does this. |
+| yt-dlp install | Install it as `yt-dlp[default]`. The extra pulls in `yt-dlp-ejs`, the bundled solver for YouTube's JavaScript challenges; without it some videos (Shorts especially) lose formats. |
+| Playlists | `POST /download` accepts `{playlist, profile, limit}`. One yt-dlp archive per kind (`archive-video.txt`, `archive-audio.txt`) skips what you already have, `--ignore-errors` passes over unavailable videos, and `POST /cancel` stops a job. |
 | Companion key | Must be 16 **alphanumeric** characters; `openssl rand -hex 8` satisfies this. |
 | Start script | `start-yt.bat` polls until Invidious answers instead of a fixed 8 s wait, and does not start duplicates. `stop-yt.bat` also kills the backend by port. |
 | Extras | `POST /download` also accepts `{playlist, profile}` (uses `archive.txt`); `GET /jobs` reports progress; POSTs from other origins and unknown `Host` headers are refused. |

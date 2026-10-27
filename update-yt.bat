@@ -5,7 +5,7 @@ echo [1/3] Invidious + companion (git pull, new images, restart, prune old image
 wsl -d Ubuntu-24.04 -- bash -lc "cd ~/invidious && git pull --ff-only && docker compose pull && docker compose up -d && docker image prune -f"
 echo.
 echo [2/3] yt-dlp
-python -m pip install -U yt-dlp
+python -m pip install -U "yt-dlp[default]"
 echo.
 echo [3/3] Deno + ffmpeg (monthly is enough; "no update" messages are normal)
 winget upgrade DenoLand.Deno
