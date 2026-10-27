@@ -64,6 +64,7 @@ function toast(msg) {
 const GOOGLE_IMG = /^https?:\/\/[\w.-]+\.(?:ggpht|googleusercontent)\.com(\/.*)$/;
 const abs = (u) => {
   if (!u) return "";
+  if (u.startsWith("//")) u = "https:" + u;
   const g = GOOGLE_IMG.exec(u);
   if (g) return BASE + "/ggpht" + g[1];
   return u.startsWith("/") ? BASE + u : u;
@@ -445,8 +446,7 @@ async function pageSearch(id, params) {
   const nav = h("div", { class: "row", style: "margin-top:16px" },
     page > 1 ? h("a", { class: "btn", href: "#/search?" + new URLSearchParams({ ...Object.fromEntries(params), page: page - 1 }), text: "Previous" }) : null,
     cards.length ? h("a", { class: "btn", href: "#/search?" + new URLSearchParams({ ...Object.fromEntries(params), page: page + 1 }), text: "Next" }) : null);
-  const useGrid = cards.every((_, i) => data[i] && data[i].type === "video");
-  body.replaceWith(cards.length ? h("div", { class: useGrid ? "grid" : "list" }, cards) : h("p", { class: "empty", text: "Nothing found." }));
+  body.replaceWith(cards.length ? h("div", { class: "grid" }, cards) : h("p", { class: "empty", text: "Nothing found." }));
   view.append(nav);
 }
 

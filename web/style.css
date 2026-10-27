@@ -195,3 +195,6 @@ dialog.modal::backdrop { background: rgba(8, 6, 4, .66); }
 dialog.modal { overflow: visible; }
 .limitrow { justify-content: space-between; margin-top: 14px; }
 .item .btn.small { margin-top: 8px; }
+
+/* channel and playlist results sit in the same grid as videos, as full-width rows */
+.grid > .item { grid-column: 1 / -1; }
