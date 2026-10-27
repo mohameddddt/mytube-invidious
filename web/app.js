@@ -898,6 +898,7 @@ function pageSettings() {
       h("div", { class: "panel" },
         h("strong", { text: "Connection" }),
         h("p", { class: "muted small", text: `Invidious address used by the player: ${BASE}` }),
+        h("p", { class: "muted small", text: `My Tube ${CFG.version || ""}` }),
         h("div", { class: "row" }, h("button", { class: "btn", text: "Check Invidious", onclick: async () => {
           status.textContent = "checking…";
           try { await api("search/suggestions?q=test"); status.textContent = "Invidious is reachable"; } catch (e) { status.textContent = "Not reachable: " + e.message; }

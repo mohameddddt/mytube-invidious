@@ -40,6 +40,10 @@ HOME = Path(os.environ.get("USERPROFILE", str(Path.home())))
 # and for `python server.py`, so the app and a browser tab always see the same data.
 DATA_DIR = Path(os.environ.get("MYTUBE_DATA") or (Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "MyTube"))
 WEB = ROOT / "web"
+try:
+    VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+except OSError:
+    VERSION = "dev"
 VIDEO_DIR = HOME / "Videos" / "yt"
 AUDIO_DIR = HOME / "Music" / "yt"
 
@@ -383,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/config.json":
             return self.send_json({"invidious": INVIDIOUS_PUBLIC, "maxJobs": MAX_JOBS,
-                                   "videoDir": str(VIDEO_DIR), "audioDir": str(AUDIO_DIR)})
+                                   "videoDir": str(VIDEO_DIR), "audioDir": str(AUDIO_DIR), "version": VERSION})
         if path == "/state":
             return self.send_json(load_state())
         if path == "/status":
