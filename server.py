@@ -6,6 +6,8 @@ Routes
   GET  /                 static UI from ./web
   GET  /config.json      addresses the UI needs (Invidious base, download folders)
   GET  /status           whether Invidious answers yet (the UI shows a start-up screen until it does)
+  GET  /state            subscriptions, history, watch later, settings and feed cache, shared by every window
+  POST /state            {key, value} saves one of those keys (so the app and the browser always match)
   GET  /api/*            forwarded to Invidious /api/v1/*
   POST /download         {id | playlist, profile, title?, limit?} -> 202, runs yt-dlp
   POST /cancel           {job} stops a queued or running download
@@ -19,6 +21,7 @@ import mimetypes
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -33,9 +36,9 @@ from urllib.parse import unquote, urlsplit
 FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller exe
 ROOT = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent  # where web/ lives
 HOME = Path(os.environ.get("USERPROFILE", str(Path.home())))
-# Things that must survive restarts (archives, config, window profile): next to the source when
-# developing, in %LOCALAPPDATA%\MyTube when running as the exe (the exe's own folder is temporary).
-DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "MyTube" if FROZEN else ROOT
+# Things that must survive restarts (your data, archives, config, window profile). One folder for the exe
+# and for `python server.py`, so the app and a browser tab always see the same data.
+DATA_DIR = Path(os.environ.get("MYTUBE_DATA") or (Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "MyTube"))
 WEB = ROOT / "web"
 VIDEO_DIR = HOME / "Videos" / "yt"
 AUDIO_DIR = HOME / "Music" / "yt"
@@ -51,6 +54,40 @@ def load_config():
 
 
 CONFIG = load_config()
+
+
+# ------------------------------------------------------------------ shared user data
+STATE_FILE = DATA_DIR / "userdata.json"
+STATE_LISTS = ("subscriptions", "history", "watchLater")  # JSON arrays
+STATE_KEYS = STATE_LISTS + ("settings", "feedCache")
+state_lock = threading.Lock()
+
+
+def load_state():
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if k in STATE_KEYS} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state_key(key, value):
+    """Replace one key and write the file atomically, so a crash can never leave half a file."""
+    with state_lock:
+        state = load_state()
+        state[key] = value
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, STATE_FILE)
+
+
+def valid_state_value(key, value):
+    if key in STATE_LISTS:
+        return isinstance(value, list) and len(value) <= 5000
+    if key == "settings":
+        return isinstance(value, dict)
+    return value is None or isinstance(value, dict)  # feedCache
 
 
 def archive_for(profile):
@@ -131,6 +168,11 @@ def active_jobs():
 def invidious_up():
     """Does Invidious answer HTTP at all? Its home page is rendered locally, so unlike a search this
     does not wait for a round trip to YouTube. Any HTTP reply counts, even an error page."""
+    host, port = urlsplit(INVIDIOUS).hostname, urlsplit(INVIDIOUS).port or 80
+    try:  # a closed localhost port takes about 2 s to refuse on Windows; a short socket check does not
+        socket.create_connection((host, port), 0.3).close()
+    except OSError:
+        return False
     try:
         with urllib.request.urlopen(f"{INVIDIOUS}/", timeout=3):
             return True
@@ -342,6 +384,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/config.json":
             return self.send_json({"invidious": INVIDIOUS_PUBLIC, "maxJobs": MAX_JOBS,
                                    "videoDir": str(VIDEO_DIR), "audioDir": str(AUDIO_DIR)})
+        if path == "/state":
+            return self.send_json(load_state())
         if path == "/status":
             return self.send_json({"invidious": invidious_up(), "ytdlp": bool(find_ytdlp(tool_env()))})
         if path.startswith("/api/"):
@@ -365,17 +409,23 @@ class Handler(BaseHTTPRequestHandler):
         if origin and urlsplit(origin).netloc.lower() != (self.headers.get("Host") or "").lower():
             return self.send_error_json(403, "cross-origin request refused")
         path = urlsplit(self.path).path
-        if path not in ("/download", "/open-folder", "/cancel"):
+        if path not in ("/download", "/open-folder", "/cancel", "/state"):
             return self.send_error_json(404, "not found")
         if "application/json" not in (self.headers.get("Content-Type") or ""):
             return self.send_error_json(415, "expected application/json")
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 4096:
+            if length > (1_500_000 if path == "/state" else 4096):
                 raise ValueError
             data = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self.send_error_json(400, "bad request body")
+        if path == "/state":
+            key = data.get("key") if isinstance(data, dict) else None
+            if key not in STATE_KEYS or not valid_state_value(key, data.get("value")):
+                return self.send_error_json(400, "unknown key or invalid value")
+            save_state_key(key, data["value"])
+            return self.send_json({"saved": True})
         if path == "/cancel":
             job_id = data.get("job") if isinstance(data, dict) else None
             if not (isinstance(job_id, str) and re.fullmatch(r"\d{10,16}", job_id)):
