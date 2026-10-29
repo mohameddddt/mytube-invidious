@@ -92,12 +92,17 @@ def open_window(browser):
 
 
 def profile_in_use(browser):
-    """True while a main browser process (not a helper) is running with our window profile."""
+    """True while a main browser process (not a helper) is running with our window profile.
+
+    None when the check itself failed (PowerShell can time out on a busy PC): that says nothing about the window.
+    """
     name = os.path.basename(browser)
     script = (f"@(Get-CimInstance Win32_Process -Filter \"Name='{name}'\" | Where-Object "
               f"{{ $_.CommandLine -like '*window-profile*' -and $_.CommandLine -notlike '*--type=*' }}).Count")
     res = run_quiet(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], 20)
-    return bool(res and res.stdout.strip().isdigit() and int(res.stdout.strip()) > 0)
+    if not res or not res.stdout.strip().isdigit():
+        return None
+    return int(res.stdout.strip()) > 0
 
 
 def wait_for_window(browser):
@@ -111,7 +116,12 @@ def wait_for_window(browser):
     if time.time() - started < 10:
         log("window process exited quickly, waiting for the profile's browser to finish")
         time.sleep(3)
-        while profile_in_use(browser):
+        failures = 0
+        while (state := profile_in_use(browser)) is not False:
+            failures = failures + 1 if state is None else 0
+            if failures >= 5:  # only give up on a check that keeps failing, never on one slow answer
+                log("cannot tell whether the window is still open, stopping")
+                break
             time.sleep(2)
 
 
