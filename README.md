@@ -10,6 +10,7 @@ Everything runs on your own machine, costs nothing, and shuts down completely wh
 
 - **Search and watch** with suggestions, filters (type, sort, date, length) and an adaptive player that falls back from your downloaded file, to DASH (480p to 1080p), to a 360p stream, to the embedded player.
 - **Subscriptions without an account.** The feed is built on demand from your channels and cached for 20 minutes. History, watch later and settings live in your browser, with JSON export and import as backup.
+- **Suggestions from what you watch.** The feed mixes in videos related to the ones you liked, finished or saved for later, favouring channels you watch often. It is a small, local, explainable algorithm: each suggestion says which video it came from, and nothing leaves your PC.
 - **Downloads that land on your PC.** Choose Video (480p, 720p, 1080p) or Audio only (MP3), see exactly where it will be saved, and find the file again in the app's **Saved** page. Play it offline, save another copy, or open its folder in Explorer.
 - **Whole playlists.** Download a playlist from its page, from a search result, or from the video you are watching. Pick all of it or just the first 10, 25, 50 or 100 videos, follow per-video progress, and cancel at any time. Videos you already have are skipped and unavailable ones are passed over.
 - **Light by design.** No frameworks, no build step, no web fonts. The backend is one Python file using only the standard library. Containers have memory caps, and Invidious's background crawlers are turned off.

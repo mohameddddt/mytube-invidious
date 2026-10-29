@@ -46,7 +46,7 @@ const store = {
    Subscriptions, history, watch later, settings and the feed copy live in one file on the PC, behind
    the local server, so the desktop app and any browser tab always show the same thing. localStorage is
    only a fast local copy of it. */
-const SYNC_KEYS = ["subscriptions", "history", "watchLater", "settings", "feedCache"];
+const SYNC_KEYS = ["subscriptions", "history", "watchLater", "likes", "settings", "feedCache"];
 const pending = new Set();
 const pushTimers = {};
 
@@ -70,7 +70,7 @@ function mergeFirst(key, local, remote) {
   if (local == null) return remote;
   const union = (id) => { const seen = new Set(remote.map((x) => x && x[id])); return [...remote, ...local.filter((x) => x && !seen.has(x[id]))]; };
   if (key === "subscriptions") return union("ucid");
-  if (key === "watchLater") return union("id");
+  if (key === "watchLater" || key === "likes") return union("id");
   if (key === "history") {
     const byId = new Map();
     for (const e of [...remote, ...local]) {
@@ -207,6 +207,103 @@ function savePosition(id, pos) {
   if (e) { e.position = Math.floor(pos); store.set("history", list); }
 }
 const savedPosition = (id) => (store.get("history", []).find((x) => x.id === id) || {}).position || 0;
+const likes = () => store.get("likes", []);
+function toggleLike(entry) {
+  let list = likes();
+  if (list.some((v) => v.id === entry.id)) list = list.filter((v) => v.id !== entry.id);
+  else list = [{ ...entry, likedAt: Date.now() }, ...list];
+  store.set("likes", list);
+  return list.some((v) => v.id === entry.id);
+}
+
+/* ----------------------------------------------------------------- suggestions
+   A deliberately simple recommender. Every video you watched, liked or kept for later gets an interest
+   weight: liked beats finished, finished beats abandoned, and it fades by half every two weeks. The
+   strongest few become seeds, and the videos YouTube lists as related to them are the candidates. A
+   candidate scores more when several seeds point at it, when it sits high in their lists, and when it
+   comes from a channel you watch a lot. Related lists are kept in this browser (the watch page saves
+   them for free), so the feed only asks Invidious for seeds it has never seen. */
+const SEEDS = 8, RELATED_KEEP = 60, PER_CHANNEL = 2, MAX_SUGGESTIONS = 30;
+const relatedFailed = new Set(); // seeds Invidious could not give this session, not retried until reload
+
+function rememberRelated(id, recs) {
+  const map = store.get("related", {});
+  delete map[id]; // re-insert so the newest lists are the last to be dropped
+  map[id] = recs.filter((v) => v.videoId).slice(0, 15).map((v) => ({
+    videoId: v.videoId, title: v.title, author: v.author, authorId: v.authorId, lengthSeconds: v.lengthSeconds, viewCount: v.viewCount, liveNow: v.liveNow }));
+  const keys = Object.keys(map);
+  for (const k of keys.slice(0, Math.max(0, keys.length - RELATED_KEEP))) delete map[k];
+  store.set("related", map);
+}
+
+function interests() {
+  const now = Date.now();
+  const fade = (t, halfLifeDays) => (t ? 0.5 ** ((now - t) / 86400000 / halfLifeDays) : 0.3);
+  const vids = new Map(), channels = new Map();
+  const add = (v, w, liked) => {
+    if (!v || !v.id || !(w > 0)) return;
+    const cur = vids.get(v.id) || { id: v.id, title: v.title, w: 0, liked: false };
+    cur.w += w;
+    cur.liked = cur.liked || liked;
+    vids.set(v.id, cur);
+    if (v.authorId) channels.set(v.authorId, (channels.get(v.authorId) || 0) + w);
+  };
+  for (const v of store.get("history", []).slice(0, 150)) {
+    const watched = v.lengthSeconds ? Math.min(1, (v.position || 0) / v.lengthSeconds) : 0.5;
+    add(v, fade(v.watchedAt, 14) * (0.3 + watched), false);
+  }
+  for (const v of likes()) add(v, 2 * fade(v.likedAt, 30), true);
+  for (const v of watchLater()) add(v, 0.4, false);
+  const seeds = [...vids.values()].sort((a, b) => b.w - a.w).slice(0, SEEDS);
+  return { seeds, channels, seen: new Set(vids.keys()) };
+}
+
+/* Fetches related lists for seeds that have none yet. Resolves to true when something new arrived. */
+async function fetchRelated() {
+  const related = store.get("related", {});
+  const missing = interests().seeds.filter((s) => !related[s.id] && !relatedFailed.has(s.id));
+  if (!missing.length) return false;
+  const res = await Promise.allSettled(missing.map((s) => api("videos/" + enc(s.id))));
+  res.forEach((r, i) => {
+    if (r.status === "fulfilled") rememberRelated(missing[i].id, r.value.recommendedVideos || []);
+    else relatedFailed.add(missing[i].id);
+  });
+  return true;
+}
+
+/* Ranked suggestions, skipping anything already watched, liked, saved for later or in `exclude`. */
+function suggest(exclude) {
+  const { seeds, channels, seen } = interests();
+  const related = store.get("related", {});
+  const top = Math.max(1, ...channels.values());
+  const cands = new Map();
+  for (const s of seeds) {
+    (related[s.id] || []).forEach((v, rank) => {
+      if (!v.videoId || seen.has(v.videoId) || exclude.has(v.videoId)) return;
+      const c = cands.get(v.videoId) || { v, score: (channels.get(v.authorId) || 0) / top, from: s, best: 0 };
+      const pts = s.w * (1 - rank / 20);
+      c.score += pts;
+      if (pts > c.best) { c.best = pts; c.from = s; }
+      cands.set(v.videoId, c);
+    });
+  }
+  const perChannel = new Map(), out = [];
+  for (const c of [...cands.values()].sort((a, b) => b.score - a.score)) {
+    const n = perChannel.get(c.v.authorId) || 0;
+    if (n >= PER_CHANNEL) continue; // keep the mix varied
+    perChannel.set(c.v.authorId, n + 1);
+    out.push({ ...c.v, why: `Because you ${c.from.liked ? "liked" : "watched"} “${c.from.title}”` });
+    if (out.length >= MAX_SUGGESTIONS) break;
+  }
+  return out;
+}
+
+/* One suggestion after every two videos from your channels; any left over go at the end. */
+function mixFeed(items, recs) {
+  const out = [], rest = [...recs];
+  items.forEach((v, i) => { out.push(v); if (i % 2 === 1 && rest.length) out.push(rest.shift()); });
+  return out.concat(rest);
+}
 
 /* ------------------------------------------------------------------- downloads */
 let libraryCache = null;
@@ -437,10 +534,10 @@ async function pageFeed(id, force) {
   const hour = new Date().getHours();
   const hello = hour < 5 ? "Still up?" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   view.replaceChildren(h("h1", { text: hello }));
-  if (!list.length) {
+  if (!list.length && !interests().seeds.length) {
     view.append(h("div", { class: "empty" },
       h("p", { text: "Your feed is empty, for now." }),
-      h("p", { class: "small", style: "font-family:system-ui,sans-serif", text: "Search for a channel you like, open it and press Subscribe. New videos from your channels show up here." }),
+      h("p", { class: "small", style: "font-family:system-ui,sans-serif", text: "Subscribe to channels you like, or just watch and like a few videos. New uploads and suggestions based on what you watch show up here." }),
       h("p", {}, h("button", { class: "btn primary", text: "Start searching", onclick: () => document.getElementById("q").focus() }))));
     return;
   }
@@ -455,13 +552,27 @@ async function pageFeed(id, force) {
   const grid = h("div", {});
   view.append(h("div", { class: "row" }, note, h("span", { class: "spacer" }),
     h("button", { class: "btn", text: "Refresh", onclick: () => route(true) })), grid);
+  let shown = [], status = "";
   const draw = (items, text) => {
-    note.textContent = `Latest from your ${n} channel${plural} · ${text}`;
-    grid.replaceChildren(items.length ? h("div", { class: "grid" }, items.map((v) => videoCard(v))) : h("p", { class: "empty", text: "No videos found. Invidious may be unreachable." }));
+    if (items) shown = items;
+    if (text != null) status = text;
+    const recs = suggest(new Set(shown.map((v) => v.videoId)));
+    const all = mixFeed(shown, recs);
+    note.textContent = [n ? `Latest from your ${n} channel${plural}` : "", recs.length ? "suggestions from what you watch" : "", status].filter(Boolean).join(" · ");
+    grid.replaceChildren(all.length ? h("div", { class: "grid" }, all.map((v) => videoCard(v, v.why ? h("div", { class: "meta why", text: v.why }) : null)))
+      : h("p", { class: "empty", text: n ? "No videos found. Invidious may be unreachable." : "No suggestions yet. Watch or like a few more videos." }));
   };
+  /* Suggestions need the related lists of your top videos; fetch any that are missing, then redraw. */
+  const more = async () => { if (engineReady && (await fetchRelated()) && id === renderId) draw(); };
+  if (!n) {
+    note.textContent = "Finding videos for you…";
+    if (engineReady) await fetchRelated();
+    if (id === renderId) draw([], "");
+    return;
+  }
   if (cached) {
     draw(cached.items, !engineReady ? "saved copy, the engine is still starting" : fresh && !force ? "saved copy, refreshes every 20 minutes" : "showing your saved copy, updating…");
-    if (!engineReady || (fresh && !force)) return;
+    if (!engineReady || (fresh && !force)) return more();
   } else {
     note.textContent = `Loading 0/${n} channels…`;
   }
@@ -492,6 +603,7 @@ async function pageFeed(id, force) {
   } else {
     draw([], "");
   }
+  await more();
 }
 
 async function pageSearch(id, params) {
@@ -700,6 +812,10 @@ async function pageWatch(id, vid, params) {
   const paintLater = () => { const on = watchLater().some((v) => v.id === vid); laterBtn.textContent = on ? "In watch later" : "Watch later"; laterBtn.classList.toggle("on", on); };
   laterBtn.addEventListener("click", () => { toggleLater(entry); paintLater(); });
   paintLater();
+  const likeBtn = h("button", { class: "btn" });
+  const paintLike = () => { const on = likes().some((v) => v.id === vid); likeBtn.textContent = on ? "Liked" : "Like"; likeBtn.classList.toggle("on", on); };
+  likeBtn.addEventListener("click", () => { toggleLike(entry); paintLike(); });
+  paintLike();
 
   const dlBtn = h("button", { class: "btn primary", text: "Download", onclick: () => openDownloadDialog({ id: vid, title }) });
 
@@ -716,7 +832,7 @@ async function pageWatch(id, vid, params) {
     h("h1", { style: "margin-top:12px", text: title }),
     h("div", { class: "row" },
       info ? h("a", { class: "row", href: "#/channel/" + info.authorId }, h("img", { class: "avatar", alt: "", src: abs((info.authorThumbnails || []).slice(-1)[0]?.url || "") }), h("strong", { text: info.author })) : null,
-      subBtn, h("span", { class: "spacer" }), laterBtn, dlBtn),
+      subBtn, h("span", { class: "spacer" }), likeBtn, laterBtn, dlBtn),
     fileEntry ? h("p", { class: "muted small", text: `In your library: ${fileEntry.name} (${fmtSize(fileEntry.size)})` }) : null,
     failure ? h("p", { class: "error", text: "Invidious is not reachable, showing your offline copy only. " + failure.message }) : null);
 
@@ -729,6 +845,7 @@ async function pageWatch(id, vid, params) {
 
     const recs = (info.recommendedVideos || []).filter((v) => v.videoId);
     if (recs.length) nextHref = "#/watch/" + recs[0].videoId;
+    rememberRelated(vid, recs); // feeds the suggestions on the home page
     right.append(h("h2", { style: "margin:0", text: "Up next" }), ...recs.map(relatedItem));
 
     /* playlist context: autoplay moves to the next playlist item */
@@ -799,8 +916,9 @@ function savedGrid(title, key, emptyText, withClear) {
   view.replaceChildren(h("div", { class: "row" }, h("h1", { text: title }), h("span", { class: "spacer" }),
     withClear && list.length ? h("button", { class: "btn", text: "Clear", onclick: () => { if (confirm(`Clear ${title.toLowerCase()}?`)) { store.set(key, []); savedGrid(title, key, emptyText, withClear); } } }) : null));
   if (!list.length) return view.append(h("p", { class: "empty", text: emptyText }));
-  view.append(h("div", { class: "grid" }, list.map((v) => videoCard({ videoId: v.id, title: v.title, author: v.author, authorId: v.authorId, lengthSeconds: v.lengthSeconds, published: v.watchedAt ? v.watchedAt / 1000 : 0 },
-    key === "watchLater" ? h("button", { class: "btn small", text: "Remove", onclick: () => { toggleLater(v); savedGrid(title, key, emptyText, withClear); } }) : null))));
+  const remove = { watchLater: toggleLater, likes: toggleLike }[key];
+  view.append(h("div", { class: "grid" }, list.map((v) => videoCard({ videoId: v.id, title: v.title, author: v.author, authorId: v.authorId, lengthSeconds: v.lengthSeconds, published: (v.watchedAt || v.likedAt || 0) / 1000 },
+    remove ? h("button", { class: "btn small", text: "Remove", onclick: () => { remove(v); savedGrid(title, key, emptyText, withClear); } }) : null))));
 }
 
 async function pageDownloads(id) {
@@ -871,6 +989,7 @@ function pageSettings() {
       if (ok(data.subscriptions)) store.set("subscriptions", data.subscriptions.filter((s) => s && typeof s.ucid === "string" && typeof s.name === "string").map((s) => ({ ucid: s.ucid, name: s.name, thumbnail: typeof s.thumbnail === "string" ? s.thumbnail : "" })));
       if (ok(data.history)) store.set("history", data.history.filter((x) => x && typeof x.id === "string").slice(0, 500));
       if (ok(data.watchLater)) store.set("watchLater", data.watchLater.filter((x) => x && typeof x.id === "string"));
+      if (ok(data.likes)) store.set("likes", data.likes.filter((x) => x && typeof x.id === "string"));
       if (data.settings && typeof data.settings === "object") store.set("settings", { ...DEFAULTS, ...data.settings });
       store.set("feedCache", null);
       applyTheme();
@@ -887,10 +1006,10 @@ function pageSettings() {
       h("label", {}, "Theme", sel("theme", [["system", "System"], ["light", "Light"], ["dark", "Dark"]])),
       h("div", { class: "panel" },
         h("strong", { text: "Backup" }),
-        h("p", { class: "muted small", text: "Subscriptions, history, watch later and settings live only in this browser. Export them regularly." }),
+        h("p", { class: "muted small", text: "Subscriptions, history, watch later, likes and settings live only on this PC. Export them regularly." }),
         h("div", { class: "row" },
           h("button", { class: "btn", text: "Export JSON", onclick: () => {
-            const data = { version: 1, subscriptions: subs(), history: store.get("history", []), watchLater: watchLater(), settings: settings() };
+            const data = { version: 1, subscriptions: subs(), history: store.get("history", []), watchLater: watchLater(), likes: likes(), settings: settings() };
             const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })), download: `mytube-backup-${new Date().toISOString().slice(0, 10)}.json` });
             document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
           } }),
@@ -906,9 +1025,9 @@ function pageSettings() {
 }
 
 /* ---------------------------------------------------------------------- router */
-const NAV_KEY = { "": "feed", search: "", watch: "", channel: "", playlist: "", subs: "subs", later: "later", history: "history", downloads: "downloads", settings: "settings" };
+const NAV_KEY = { "": "feed", search: "", watch: "", channel: "", playlist: "", subs: "subs", later: "later", liked: "liked", history: "history", downloads: "downloads", settings: "settings" };
 
-/* Pages that talk to Invidious wait for it; local pages (channels, later, history, saved, settings) never do. */
+/* Pages that talk to Invidious wait for it; local pages (channels, later, liked, history, saved, settings) never do. */
 const ENGINE_ROUTES = new Set(["", "search", "watch", "channel", "playlist"]);
 async function ensureEngine(id, name) {
   if (engineReady || !ENGINE_ROUTES.has(name)) return true;
@@ -938,6 +1057,7 @@ async function route(forceFeed) {
     else if (name === "playlist" && parts[1]) await pagePlaylist(id, parts[1], params);
     else if (name === "subs") pageSubs();
     else if (name === "later") savedGrid("Watch later", "watchLater", "Nothing here yet. Press “Watch later” on any video.", false);
+    else if (name === "liked") savedGrid("Liked videos", "likes", "Nothing liked yet. Press “Like” on a video you enjoy and the feed suggests more like it.", false);
     else if (name === "history") savedGrid("History", "history", "Nothing watched yet.", true);
     else if (name === "downloads") await pageDownloads(id);
     else if (name === "settings") pageSettings();

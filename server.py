@@ -6,7 +6,7 @@ Routes
   GET  /                 static UI from ./web
   GET  /config.json      addresses the UI needs (Invidious base, download folders)
   GET  /status           whether Invidious answers yet (the UI shows a start-up screen until it does)
-  GET  /state            subscriptions, history, watch later, settings and feed cache, shared by every window
+  GET  /state            subscriptions, history, watch later, likes, settings and feed cache, shared by every window
   POST /state            {key, value} saves one of those keys (so the app and the browser always match)
   GET  /api/*            forwarded to Invidious /api/v1/*
   POST /download         {id | playlist, profile, title?, limit?} -> 202, runs yt-dlp
@@ -62,7 +62,7 @@ CONFIG = load_config()
 
 # ------------------------------------------------------------------ shared user data
 STATE_FILE = DATA_DIR / "userdata.json"
-STATE_LISTS = ("subscriptions", "history", "watchLater")  # JSON arrays
+STATE_LISTS = ("subscriptions", "history", "watchLater", "likes")  # JSON arrays
 STATE_KEYS = STATE_LISTS + ("settings", "feedCache")
 state_lock = threading.Lock()
 
