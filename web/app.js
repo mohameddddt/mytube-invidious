@@ -710,6 +710,27 @@ function loadDash() {
   return dashLoading;
 }
 
+/* Player chrome: our own controls over a bare <video>, so the look matches the app and the settings
+   menu can offer quality and speed. Icons are inline SVG, so nothing extra is downloaded. */
+const PL_ICON = {
+  play: '<path d="M8 5.6v12.8a1 1 0 0 0 1.53.85l10.1-6.4a1 1 0 0 0 0-1.7L9.53 4.75A1 1 0 0 0 8 5.6z"/>',
+  pause: '<rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/>',
+  vol: '<path d="M4 9.5v5h3.5l4.5 4v-13l-4.5 4z"/><path class="s" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  mute: '<path d="M4 9.5v5h3.5l4.5 4v-13l-4.5 4z"/><path class="s" d="M16 9.5l5 5M21 9.5l-5 5"/>',
+  gear: '<path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.47.47 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/>',
+  pip: '<rect class="s" x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11.5" width="7" height="5.5" rx="1"/>',
+  full: '<path class="s" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+  unfull: '<path class="s" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/>',
+};
+const plIcon = (name) => { const s = h("span", { class: "pl-ico" }); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${PL_ICON[name]}</svg>`; return s; };
+const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const speedLabel = (r) => (r === 1 ? "Normal" : r + "×");
+function fmtClock(s) {
+  s = Math.max(0, Math.floor(isFinite(s) ? s : 0));
+  const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, "0");
+  return hh ? `${hh}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
+
 /* Playback fallback chain (guide 10.4): file -> dash -> itag18 -> embed. */
 function mountPlayer(box, note, opts) {
   const { id, live, file, quality, position, onTime, onEnded } = opts;
@@ -720,55 +741,294 @@ function mountPlayer(box, note, opts) {
     if (quality !== "360p") tiers.push("dash");
     tiers.push("itag18", "embed");
   }
-  let idx = -1, dp = null, el = null, resumed = false, lastSave = 0;
-  const label = { file: "Playing your downloaded file (no network)", dash: `Adaptive stream, capped at ${quality}`, itag18: "360p stream", embed: "Embedded Invidious player" };
+  let idx = -1, dp = null, el = null, resumed = false, lastSave = 0, fellBack = false;
+  const dashUrl = `${BASE}/api/manifest/dash/id/${id}?local=true`;
+  let resumeAt = position, exactResume = false;
+  let cap = QUALITY_CAP[quality] || 720, pinned = 0; // pinned: a height chosen in the menu, 0 = auto
+  /* The manifest is filtered before dash.js picks a stream: heights up to the cap, or only the height picked above it. */
+  let above = 0, allHeights = []; // above: the height picked above the cap when the manifest was last loaded
+  const allowed = (hgt) => (above ? hgt === above : hgt <= cap);
+  let speed = store.get("speed", 1);
+  const vol = store.get("volume", { level: 1, muted: false });
+  const SOURCE = { file: "Your downloaded file, no network used", dash: "Adaptive stream", itag18: "Single 360p stream", embed: "Embedded Invidious player" };
 
-  const teardown = () => {
+  /* ---- chrome */
+  const media = h("div", { class: "pl-media" });
+  const hit = h("div", { class: "pl-hit" });
+  const big = h("button", { type: "button", class: "pl-big", "aria-label": "Play" }, plIcon("play"));
+  const spin = h("div", { class: "pl-spin", hidden: true });
+  const buf = h("div", { class: "pl-buf" }), fill = h("div", { class: "pl-fill" });
+  const knob = h("div", { class: "pl-knob" }), tip = h("div", { class: "pl-tip", hidden: true });
+  const bar = h("div", { class: "pl-bar", role: "slider", "aria-label": "Seek", "aria-valuemin": "0" }, h("div", { class: "pl-track" }, buf, fill), knob, tip);
+  const btn = (icon, label, onclick) => h("button", { type: "button", class: "pl-btn", "aria-label": label, title: label, onclick }, plIcon(icon));
+  const setIcon = (b, name, label) => { b.replaceChildren(plIcon(name)); b.setAttribute("aria-label", label); b.title = label; };
+  const playBtn = btn("play", "Play (k)", () => toggle());
+  const muteBtn = btn("vol", "Mute (m)", () => { vol.muted = !vol.muted; applyVolume(); });
+  const volIn = h("input", { type: "range", class: "pl-vol", min: "0", max: "1", step: "0.05", "aria-label": "Volume" });
+  volIn.addEventListener("input", () => { vol.level = Number(volIn.value); vol.muted = vol.level === 0; applyVolume(); });
+  const time = h("span", { class: "pl-time", text: "0:00 / 0:00" });
+  const gearBtn = btn("gear", "Settings", () => (menu.hidden ? openMenu("main") : closeMenu()));
+  const pipBtn = document.pictureInPictureEnabled ? btn("pip", "Picture in picture", () => {
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+    else if (isVideo()) el.requestPictureInPicture().catch(() => {});
+  }) : null;
+  const fullBtn = btn("full", "Full screen (f)", () => toggleFull());
+  const menu = h("div", { class: "pl-menu", role: "menu", hidden: true });
+  const ctrl = h("div", { class: "pl-ctrl" }, bar,
+    h("div", { class: "pl-row" }, playBtn, h("div", { class: "pl-volbox" }, muteBtn, volIn), time, h("span", { class: "spacer" }), gearBtn, pipBtn, fullBtn));
+  box.classList.add("pl");
+  box.replaceChildren(media, hit, big, spin, ctrl, menu);
+
+  const isVideo = () => !!el && el.tagName === "VIDEO";
+  const toggle = () => { if (!isVideo()) return; if (el.paused || el.ended) el.play().catch(() => {}); else el.pause(); };
+  const toggleFull = () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else box.requestFullscreen().catch(() => {}); };
+  const seek = (t) => { if (isVideo() && isFinite(el.duration)) { el.currentTime = Math.min(Math.max(0, t), el.duration - 0.1); paintTime(); } };
+  function applyVolume() {
+    vol.level = Math.round(Math.min(1, Math.max(0, vol.level)) * 100) / 100;
+    if (isVideo()) { el.volume = vol.level; el.muted = vol.muted; }
+    volIn.value = vol.muted ? 0 : vol.level;
+    setIcon(muteBtn, vol.muted || vol.level === 0 ? "mute" : "vol", vol.muted ? "Unmute (m)" : "Mute (m)");
+    store.set("volume", vol);
+  }
+  function setSpeed(r) { speed = r; store.set("speed", r); if (isVideo()) { el.defaultPlaybackRate = r; el.playbackRate = r; } }
+
+  let dragging = false;
+  function paintTime() {
+    if (!isVideo()) return;
+    const d = el.duration, t = el.currentTime;
+    const frac = isFinite(d) && d > 0 ? t / d : 0;
+    if (!dragging) { fill.style.transform = `scaleX(${frac})`; knob.style.left = frac * 100 + "%"; }
+    time.textContent = `${fmtClock(t)} / ${fmtClock(d)}`;
+    bar.setAttribute("aria-valuenow", Math.floor(t));
+    bar.setAttribute("aria-valuemax", Math.floor(d) || 0);
+    bar.setAttribute("aria-valuetext", time.textContent);
+    const b = el.buffered;
+    for (let i = 0; i < b.length; i++) if (b.start(i) <= t + 0.5 && b.end(i) >= t) { buf.style.transform = `scaleX(${isFinite(d) && d ? b.end(i) / d : 0})`; break; }
+  }
+  function paintPlaying() {
+    const playing = isVideo() && !el.paused && !el.ended;
+    box.classList.toggle("playing", playing);
+    setIcon(playBtn, playing ? "pause" : "play", playing ? "Pause (k)" : "Play (k)");
+    if (!playing) wake();
+  }
+
+  /* seek bar: drag to scrub, hover for the time under the pointer */
+  const fracAt = (x) => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - r.left) / r.width)); };
+  const showTip = (f) => {
+    if (!isVideo() || !isFinite(el.duration)) return;
+    tip.hidden = false;
+    tip.textContent = fmtClock(f * el.duration);
+    tip.style.left = Math.min(Math.max(f * 100, 4), 96) + "%";
+  };
+  const moveTo = (f) => { fill.style.transform = `scaleX(${f})`; knob.style.left = f * 100 + "%"; };
+  bar.addEventListener("pointermove", (e) => { const f = fracAt(e.clientX); showTip(f); if (dragging) moveTo(f); });
+  bar.addEventListener("pointerleave", () => { if (!dragging) tip.hidden = true; });
+  bar.addEventListener("pointerdown", (e) => {
+    if (!isVideo() || e.button !== 0) return;
+    dragging = true;
+    bar.classList.add("drag");
+    bar.setPointerCapture(e.pointerId);
+    const f = fracAt(e.clientX);
+    moveTo(f);
+    showTip(f);
+  });
+  bar.addEventListener("pointerup", (e) => {
+    if (!dragging) return;
+    dragging = false;
+    bar.classList.remove("drag");
+    tip.hidden = true;
+    seek(fracAt(e.clientX) * el.duration);
+  });
+  bar.addEventListener("pointercancel", () => { dragging = false; bar.classList.remove("drag"); tip.hidden = true; paintTime(); });
+
+  /* controls fade out while playing and the pointer rests */
+  let idleTimer = null;
+  function wake() {
+    box.classList.remove("idle");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { if (box.classList.contains("playing") && menu.hidden && !dragging) box.classList.add("idle"); }, 2600);
+  }
+  box.addEventListener("pointermove", wake);
+  box.addEventListener("pointerdown", wake);
+  box.addEventListener("focusin", wake);
+  let clickTimer = null;
+  hit.addEventListener("click", () => {
+    if (!menu.hidden) return closeMenu();
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(toggle, 200); // a second click within 200 ms means full screen, not pause
+  });
+  hit.addEventListener("dblclick", () => { clearTimeout(clickTimer); toggleFull(); });
+  big.addEventListener("click", () => toggle());
+  const onFull = () => { const on = document.fullscreenElement === box; setIcon(fullBtn, on ? "unfull" : "full", on ? "Exit full screen (f)" : "Full screen (f)"); };
+  document.addEventListener("fullscreenchange", onFull);
+
+  /* ---- settings menu: quality, speed, and where the picture comes from */
+  const heights = () => allHeights;
+  const nowPlaying = () => (isVideo() && el.videoHeight ? el.videoHeight + "p" : "");
+  function qualityLabel() {
+    if (tiers[idx] === "dash") return pinned ? pinned + "p" : `Auto${nowPlaying() ? " · " + nowPlaying() : ""}`;
+    return nowPlaying() || (tiers[idx] === "itag18" ? "360p" : "Original");
+  }
+  const item = (label, value, onclick, sel) => h("button", { type: "button", class: "pl-mi" + (sel ? " sel" : ""), role: "menuitem", onclick, disabled: !onclick },
+    h("span", { text: label }), value != null ? h("span", { class: "v", text: value }) : null);
+  function openMenu(page) {
+    const tier = tiers[idx];
+    let kids;
+    if (page === "main") {
+      const pick = tier === "dash" ? () => openMenu("quality") : tier === "itag18" && !tiers.includes("dash") ? upgrade : null;
+      kids = [
+        item("Quality", tier === "itag18" && pick ? "360p · go higher ›" : qualityLabel() + (pick ? "  ›" : ""), pick),
+        item("Playback speed", speedLabel(speed) + "  ›", () => openMenu("speed")),
+        h("div", { class: "pl-msrc", text: SOURCE[tier] + (fellBack ? " (the better source failed)" : "") + (tier === "dash" ? `, Auto goes up to ${cap}p` : "") }),
+      ];
+    } else {
+      const back = item("‹  " + (page === "quality" ? "Quality" : "Playback speed"), null, () => openMenu("main"));
+      back.classList.add("pl-mhead");
+      kids = page === "quality"
+        ? [back, item(`Auto (up to ${cap}p)`, null, () => pickQuality(0), !pinned), ...heights().map((hgt) => item(hgt + "p", null, () => pickQuality(hgt), pinned === hgt))]
+        : [back, ...SPEEDS.map((r) => item(speedLabel(r), null, () => { setSpeed(r); openMenu("main"); }, r === speed))];
+    }
+    menu.replaceChildren(...kids);
+    menu.dataset.page = page;
+    menu.hidden = false;
+    gearBtn.classList.add("on");
+    wake();
+    if (page !== "main") (menu.querySelector(".pl-mi.sel") || menu.querySelector(".pl-mi")).focus();
+  }
+  function closeMenu() { menu.hidden = true; gearBtn.classList.remove("on"); }
+  const outside = (e) => { if (!menu.hidden && !menu.contains(e.target) && !gearBtn.contains(e.target)) closeMenu(); };
+  document.addEventListener("pointerdown", outside, true);
+
+  function pickQuality(hgt) {
+    pinned = hgt;
+    closeMenu();
+    if (!dp) return;
+    const want = pinned > cap ? pinned : 0;
+    if (want !== above) { // the filter must see the change: reload the manifest where we are
+      above = want;
+      spin.hidden = false;
+      dp.attachSource(dashUrl, isVideo() ? el.currentTime : NaN);
+    } else applyPin();
+  }
+  function applyPin() {
+    try {
+      if (!pinned) return dp.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true } } } });
+      const rep = dp.getRepresentationsByType("video").filter((r) => r.height === pinned).sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
+      dp.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
+      if (rep) dp.setRepresentationForTypeById("video", rep.id, true);
+    } catch (e) { console.warn("quality change failed", e); }
+  }
+  /* The 360p setting skips DASH; this lets one video go higher without touching the setting. */
+  function upgrade() {
+    closeMenu();
+    if (isVideo()) resumeAt = el.currentTime;
+    exactResume = true;
+    cap = 1080;
+    tiers.splice(idx, 0, "dash");
+    idx--;
+    next();
+  }
+
+  /* ---- keyboard: YouTube's keys, ignored while typing or when a page button has focus */
+  const onKey = (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || !isVideo()) return;
+    const t = e.target, k = e.key.toLowerCase();
+    if (t.closest && t.closest("input:not(.pl-vol), textarea, select, [contenteditable], dialog")) return;
+    if ((k === " " || k === "enter") && t.closest && t.closest("button, a")) return;
+    let done = true;
+    if (k === " " || k === "k") toggle();
+    else if (k === "j") seek(el.currentTime - 10);
+    else if (k === "l") seek(el.currentTime + 10);
+    else if (k === "arrowleft") seek(el.currentTime - 5);
+    else if (k === "arrowright") seek(el.currentTime + 5);
+    else if (k === "arrowup") { vol.level += 0.05; vol.muted = false; applyVolume(); }
+    else if (k === "arrowdown") { vol.level -= 0.05; applyVolume(); }
+    else if (k === "m") { vol.muted = !vol.muted; applyVolume(); }
+    else if (k === "f") toggleFull();
+    else if (e.key === ">" || e.key === "<") setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, SPEEDS.indexOf(speed) + (e.key === ">" ? 1 : -1)))] || 1);
+    else if (/^[0-9]$/.test(k) && isFinite(el.duration)) seek((Number(k) / 10) * el.duration);
+    else if (k === "escape" && !menu.hidden) closeMenu();
+    else done = false;
+    if (done) { e.preventDefault(); wake(); }
+  };
+  document.addEventListener("keydown", onKey);
+
+  /* ---- sources */
+  const dropSource = () => {
     if (dp) { try { dp.destroy(); } catch { /* already gone */ } dp = null; }
     if (el && el.pause) { try { el.pause(); el.removeAttribute("src"); el.load(); } catch { /* ignore */ } }
+    media.replaceChildren();
+  };
+  const teardown = () => {
+    dropSource();
+    el = null;
+    clearTimeout(idleTimer);
+    clearTimeout(clickTimer);
+    document.removeEventListener("keydown", onKey);
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("fullscreenchange", onFull);
+    if (document.fullscreenElement === box) document.exitFullscreen().catch(() => {});
     box.replaceChildren();
   };
   const next = (why) => {
-    if (why) console.warn("player tier failed:", tiers[idx], why);
-    teardown();
+    if (why) { console.warn("player tier failed:", tiers[idx], why); fellBack = true; }
+    dropSource();
+    closeMenu();
     idx++;
     const tier = tiers[idx];
-    if (!tier) { note.textContent = "No playback source worked. Check that the stack is running, then reload."; return; }
-    note.textContent = label[tier] + (idx > 0 && why ? " (fallback)" : "");
+    note.textContent = "";
+    if (!tier) { el = null; box.classList.add("embed"); note.textContent = "No playback source worked. Check that the stack is running, then reload."; return; }
+    box.classList.toggle("embed", tier === "embed");
     if (tier === "embed") {
       el = h("iframe", { src: `${BASE}/embed/${id}?autoplay=1`, allow: "autoplay; fullscreen; picture-in-picture", allowfullscreen: true });
-      box.append(el);
+      media.append(el);
       return;
     }
-    el = h("video", { controls: true, autoplay: true, playsinline: true, preload: "metadata" });
+    el = h("video", { autoplay: true, playsinline: true, preload: "metadata" });
     resumed = false;
     el.addEventListener("error", () => next("media error"));
     el.addEventListener("loadedmetadata", () => {
-      if (!resumed && position > 10 && el.duration && position < el.duration - 15) el.currentTime = position;
+      if (!resumed && (exactResume ? resumeAt > 1 : resumeAt > 10 && el.duration && resumeAt < el.duration - 15)) el.currentTime = resumeAt;
       resumed = true;
+      paintTime();
     });
     el.addEventListener("timeupdate", () => {
+      paintTime();
       if (el.currentTime - lastSave > 5 || el.currentTime < lastSave) { lastSave = el.currentTime; onTime(el.currentTime); }
     });
-    el.addEventListener("ended", onEnded);
-    box.append(el);
+    el.addEventListener("progress", paintTime);
+    el.addEventListener("durationchange", paintTime);
+    el.addEventListener("play", paintPlaying);
+    el.addEventListener("pause", paintPlaying);
+    el.addEventListener("ended", () => { paintPlaying(); onEnded(); });
+    el.addEventListener("waiting", () => { spin.hidden = false; });
+    for (const ev of ["playing", "canplay", "seeked", "pause"]) el.addEventListener(ev, () => { spin.hidden = true; });
+    el.addEventListener("resize", () => { if (!menu.hidden && menu.dataset.page === "main") openMenu("main"); }); // Auto shows the live height
+    media.append(el);
+    applyVolume();
+    setSpeed(speed);
+    paintPlaying();
     if (tier === "file") el.src = "/files/" + enc(file);
     else if (tier === "itag18") el.src = `${BASE}/latest_version?id=${id}&itag=18&local=true`;
     else if (tier === "dash") {
+      const video = el;
       loadDash().then(() => {
-        if (el.parentNode !== box) return;
+        if (el !== video) return;
+        const ev = dashjs.MediaPlayer.events;
+        above = pinned > cap ? pinned : 0;
         dp = dashjs.MediaPlayer().create();
         dp.updateSettings({ streaming: { retryAttempts: { MPD: 1 } } });
-        dp.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+        /* Filtering the manifest (rather than a bitrate cap set later) stops dash.js from ever starting above the cap. */
+        dp.registerCustomCapabilitiesFilter((rep) => !rep.height || allowed(Number(rep.height))); // audio has no height
+        dp.on(ev.MANIFEST_LOADED, (e) => { // runs before the filter, so the menu can offer every height
           try {
-            const reps = dp.getRepresentationsByType ? dp.getRepresentationsByType("video") : dp.getBitrateInfoListFor("video");
-            const cap = QUALITY_CAP[quality] || 720;
-            const ok = reps.filter((r) => r.height && r.height <= cap).map((r) => r.bandwidth || r.bitrate);
-            if (ok.length) dp.updateSettings({ streaming: { abr: { maxBitrate: { video: Math.round(Math.max(...ok) / 1000) } } } });
-          } catch (e) { console.warn("quality cap not applied", e); }
+            const hs = e.data.Period[0].AdaptationSet.flatMap((a) => a.Representation || []).map((r) => Number(r.height)).filter(Boolean);
+            allHeights = [...new Set([...allHeights, ...hs])].sort((a, b) => b - a);
+          } catch { /* menu falls back to Auto only */ }
         });
-        dp.on(dashjs.MediaPlayer.events.ERROR, (e) => next(e && e.error ? e.error.message : "dash error"));
-        dp.initialize(el, `${BASE}/api/manifest/dash/id/${id}?local=true`, true);
+        dp.on(ev.STREAM_INITIALIZED, () => { setSpeed(speed); if (pinned) applyPin(); });
+        dp.on(ev.ERROR, (e) => next(e && e.error ? e.error.message : "dash error"));
+        dp.initialize(video, dashUrl, true);
       }).catch((e) => next(e.message));
     }
   };

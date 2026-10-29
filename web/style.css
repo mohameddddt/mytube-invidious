@@ -100,9 +100,69 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 /* ---- watch page ---- */
 .watch { display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 28px; }
 @media (max-width: 1050px) { .watch { grid-template-columns: minmax(0, 1fr); } }
-.player { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 18px; overflow: hidden; box-shadow: 0 18px 36px -22px rgba(0, 0, 0, .6); }
+.player { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 18px; overflow: hidden; box-shadow: 0 18px 36px -22px rgba(0, 0, 0, .6); user-select: none; -webkit-user-select: none; }
 .player video, .player iframe { width: 100%; height: 100%; border: 0; display: block; background: #000; }
 .player-note { margin: 8px 4px 0; font-size: 12.5px; color: var(--muted); }
+.player-note:empty { display: none; }
+
+/* ---- player controls: always on dark video, so fixed light-on-dark colours plus the theme accent ---- */
+.pl { color: #f3ede2; font-size: 14px; }
+.pl.idle { cursor: none; }
+.pl-media, .pl-hit { position: absolute; inset: 0; }
+.pl-ico, .pl-ico svg { display: block; width: 24px; height: 24px; fill: currentColor; }
+.pl svg .s { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pl-big { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 68px; height: 68px; margin: -34px 0 0 -34px; border: 0; border-radius: 50%;
+  background: rgba(16, 14, 12, .62); color: #fff; cursor: pointer; transition: transform .15s, opacity .2s, background .15s; }
+.pl-big:hover { background: var(--accent); color: var(--accent-text); transform: scale(1.06); }
+.pl-big .pl-ico, .pl-big svg { width: 32px; height: 32px; margin-left: 3px; }
+.pl.playing .pl-big { opacity: 0; transform: scale(.8); pointer-events: none; }
+.pl-spin { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border: 3px solid rgba(255, 255, 255, .22); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; pointer-events: none; }
+.pl-ctrl { position: absolute; left: 0; right: 0; bottom: 0; padding: 36px 12px 6px; background: linear-gradient(transparent, rgba(0, 0, 0, .55) 45%, rgba(0, 0, 0, .78)); transition: opacity .25s; }
+.pl.idle .pl-ctrl { opacity: 0; pointer-events: none; }
+.pl.embed .pl-ctrl, .pl.embed .pl-big, .pl.embed .pl-hit, .pl.embed .pl-spin, .pl.embed .pl-menu { display: none; }
+
+.pl-bar { position: relative; display: flex; align-items: center; height: 18px; margin: 0 8px; cursor: pointer; touch-action: none; }
+.pl-track { position: relative; width: 100%; height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .24); overflow: hidden; transition: height .12s; }
+.pl-bar:hover .pl-track, .pl-bar.drag .pl-track { height: 6px; }
+.pl-buf, .pl-fill { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0); }
+.pl-buf { background: rgba(255, 255, 255, .34); }
+.pl-fill { background: var(--accent); }
+.pl-knob { position: absolute; left: 0; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--accent); transform: scale(0); transition: transform .12s; pointer-events: none; }
+.pl-bar:hover .pl-knob, .pl-bar.drag .pl-knob { transform: scale(1); }
+.pl-tip { position: absolute; bottom: 22px; padding: 2px 8px; border-radius: 7px; background: rgba(16, 14, 12, .92); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); pointer-events: none; }
+
+.pl-row { display: flex; align-items: center; gap: 2px; }
+.pl-btn { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; transition: background .15s, color .15s, transform .25s; }
+.pl-btn:hover { background: rgba(255, 255, 255, .13); }
+.pl-btn.on { color: var(--accent); }
+.pl-btn.on .pl-ico { transform: rotate(40deg); transition: transform .25s; }
+.pl-volbox { display: flex; align-items: center; }
+.pl-vol { width: 0; margin: 0; opacity: 0; accent-color: var(--accent); cursor: pointer; transition: width .2s, opacity .2s, margin .2s; }
+.pl-volbox:hover .pl-vol, .pl-vol:focus-visible { width: 84px; margin: 0 8px 0 2px; opacity: 1; }
+.pl-time { margin-left: 8px; font-size: 13.5px; font-variant-numeric: tabular-nums; white-space: nowrap; color: #e8e1d4; }
+
+.pl-menu { position: absolute; right: 12px; bottom: 70px; width: 260px; max-height: calc(100% - 84px); overflow: auto; padding: 6px; border-radius: 14px;
+  background: rgba(24, 21, 18, .96); box-shadow: 0 14px 34px rgba(0, 0, 0, .5); scrollbar-width: thin; }
+.pl-mi { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; border: 0; border-radius: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.pl-mi:hover:not([disabled]), .pl-mi:focus-visible { background: rgba(255, 255, 255, .1); }
+.pl-mi[disabled] { cursor: default; }
+.pl-mi .v { margin-left: auto; color: #b5aa98; white-space: nowrap; }
+.pl-mi.sel { color: var(--accent); font-weight: 600; }
+.pl-mi.sel::after { content: "✓"; margin-left: auto; }
+.pl-mi.pl-mhead { margin-bottom: 4px; border-radius: 10px 10px 4px 4px; font-weight: 600; }
+.pl-msrc { margin-top: 4px; padding: 8px 12px 4px; border-top: 1px solid rgba(255, 255, 255, .1); font-size: 12px; line-height: 1.4; color: #9a907f; }
+
+.pl:fullscreen { border-radius: 0; aspect-ratio: auto; }
+.pl:fullscreen .pl-ctrl { padding: 48px 20px 12px; }
+@media (max-width: 560px) {
+  .player { border-radius: 12px; }
+  .pl-btn { width: 36px; height: 36px; }
+  .pl-ico, .pl-ico svg { width: 22px; height: 22px; }
+  .pl-volbox .pl-vol { display: none; }
+  .pl-time { margin-left: 4px; font-size: 12px; }
+  .pl-menu { right: 8px; bottom: 58px; width: min(240px, calc(100% - 16px)); }
+}
+@media (hover: none) { .pl-knob { transform: scale(1); } }
 .watch h1 { font-size: 24px; margin: 14px 0 12px; }
 .desc { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px 16px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); max-height: 8.5em; overflow: hidden; }
 .desc.open { max-height: none; }
