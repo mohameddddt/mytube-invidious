@@ -180,6 +180,8 @@ To produce the exe or the installer yourself, see [The desktop app](#the-desktop
 
 Closing the window stops everything it started and returns all of WSL's memory. If a download is still running it asks first.
 
+A ready-built, signed copy is in the repository at [`release/MyTube.exe`](release/MyTube.exe) (signed with the self-signed My Tube certificate in `assets/`, see [Install](#install)). It is rebuilt by hand, so it can lag behind the source; build your own to be sure it matches.
+
 Build just the exe with `build-exe.bat` (writes `dist\MyTube.exe`), or the signed installer with `build-installer.bat` (writes `dist\MyTube-Setup-<version>.exe`; it needs [Inno Setup](https://github.com/jrsoftware/issrc/releases), `winget install JRSoftware.InnoSetup --scope user`, and signs with the certificate from `tools\make_cert.ps1`). The exe still needs WSL, Docker, Invidious and yt-dlp on the PC, so it is for your own machine, not a standalone installer. It is unsigned, so Windows SmartScreen or an antivirus may warn about it; building it yourself is the safe way.
 
 **The app and the browser always match.** Your subscriptions, history, watch-later list, settings and saved feed are stored in one file on the PC, `%LOCALAPPDATA%\MyTube\userdata.json`, behind the local server. The app window, a browser tab on `http://localhost:8080` and any other browser all read and write that same file, so a channel you subscribe to in one shows up in the others (a window refreshes when you switch back to it). The first time a browser or the app connects, whatever it already had is merged in, so nothing is lost.
@@ -197,6 +199,7 @@ Build just the exe with `build-exe.bat` (writes `dist\MyTube.exe`), or the signe
 launcher.py               desktop launcher, packaged as MyTube.exe (starts the stack, the server and the app window)
 server.py                 local backend: serves the UI, proxies Invidious, runs yt-dlp jobs
 web/                      the interface (index.html, style.css, app.js), no build step
+release/MyTube.exe        a prebuilt, signed copy of the desktop app
 build-exe.bat             build dist\MyTube.exe (PyInstaller)
 build-installer.bat       build the signed installer dist\MyTube-Setup-<version>.exe
 VERSION                   the version number used by the exe, the installer and the release
