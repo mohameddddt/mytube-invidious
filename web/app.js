@@ -424,7 +424,8 @@ function openDownloadDialog({ id, playlist, title, count }) {
       ? [h("button", { type: "button", class: "choice on", "aria-pressed": "true" }, h("strong", { text: "MP3" }), h("span", { class: "muted small", text: "about 60–100 MB per hour" }))]
       : DL_VIDEO.map(([key, res, name, size]) => h("button", { type: "button", class: "choice" + (quality === key ? " on" : ""), "aria-pressed": String(quality === key), onclick: () => { quality = key; paint(); } },
         h("strong", { text: res }), h("span", { text: name }), h("span", { class: "muted small", text: size })));
-    body.replaceChildren(
+    // replaceChildren turns null into the text "null", so the rows a single video doesn't have are dropped first
+    body.replaceChildren(...[
       h("h2", { class: "modal-title", text: playlist ? "Download playlist" : "Download" }),
       title ? h("p", { class: "modal-sub", text: title }) : null,
       seg,
@@ -448,7 +449,7 @@ function openDownloadDialog({ id, playlist, title, count }) {
             libraryCache = null;
             dlg.close();
           } else e.target.disabled = false;
-        } })));
+        } }))].filter(Boolean));
   };
   paint();
   dlg.addEventListener("close", () => dlg.remove());
@@ -664,13 +665,13 @@ async function pageChannel(id, ucid) {
     more.disabled = false;
     more.hidden = !cont;
   };
-  view.replaceChildren(
+  view.replaceChildren(...[
     h("div", { class: "chanhead" },
       h("img", { class: "avatar lg", alt: "", src: abs(entry.thumbnail) }),
       h("div", {}, h("h1", { text: info.author }), h("div", { class: "muted small", text: info.subCount ? fmtNum(info.subCount) + " subscribers" : "" })),
       h("span", { class: "spacer" }), subBtn),
     info.description ? h("p", { class: "muted small", style: "white-space:pre-wrap;max-height:5em;overflow:hidden", text: info.description }) : null,
-    grid, h("div", { class: "row", style: "margin-top:16px" }, more));
+    grid, h("div", { class: "row", style: "margin-top:16px" }, more)].filter(Boolean));
   load();
   more.addEventListener("click", load);
 }
