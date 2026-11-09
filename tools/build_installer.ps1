@@ -1,5 +1,5 @@
 # Builds the signed installer:  dist\MyTube-Setup-<version>.exe  (+ SHA256SUMS.txt)
-#   1. PyInstaller builds build\exe\MyTube.exe      2. sign it       3. Inno Setup builds the installer
+#   1. Cargo builds build\exe\MyTube.exe      2. sign it       3. Inno Setup builds the installer
 #   4. sign the installer                       5. write checksums
 $ErrorActionPreference = "Continue"  # native tools log to stderr; failures are caught through exit codes below
 $root = Split-Path -Parent $PSScriptRoot
@@ -12,9 +12,10 @@ $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
 if (-not $iscc) { throw "Inno Setup 6 not found. Install it with: winget install JRSoftware.InnoSetup --scope user" }
 
 "== 1/5 building MyTube.exe ($version)"
-New-Item -ItemType Directory -Force dist | Out-Null
-python tools\build_exe.py (Join-Path $root "build\exe")
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+New-Item -ItemType Directory -Force dist, build\exe | Out-Null
+cargo build --release
+if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+Copy-Item target\release\MyTube.exe build\exe\MyTube.exe -Force
 
 "== 2/5 signing MyTube.exe"
 & "$PSScriptRoot\sign.ps1" "build\exe\MyTube.exe"

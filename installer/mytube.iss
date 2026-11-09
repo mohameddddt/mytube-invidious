@@ -74,7 +74,7 @@ begin
   begin
     DataDir := ExpandConstant('{localappdata}\MyTube');
     if DirExists(DataDir) then
-      if MsgBox('Also delete your My Tube data (subscriptions, history, settings and the app window profile)?' + #13#10#13#10 +
+      if MsgBox('Also delete your My Tube data (subscriptions, history, settings and the app window's browser data)?' + #13#10#13#10 +
                 DataDir + #13#10#13#10 + 'Your downloaded videos and music are never deleted.',
                 mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
         DelTree(DataDir, True, True, True);

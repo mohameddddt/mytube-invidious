@@ -12,13 +12,13 @@ Without installing, you can also double-click **`dist\MyTube.exe`** after `build
 
 - **How long it takes:** the window opens in 2 to 4 seconds. If you already have a feed, it is shown straight away from its saved copy, with a small banner while the engine boots; thumbnails and playback appear when it is ready, about 16 seconds after the click on a cold start. That time is almost all WSL's virtual machine booting (about 8 s) and Docker starting the containers (about 5 s), which nothing in this project can skip. The very first launch after building a new exe is slower, because Windows Defender scans it once.
 - **Taskbar:** after installing, right-click My Tube in the Start Menu and choose *Pin to taskbar*.
-- **Building it yourself:** `build-installer.bat` needs Python and Inno Setup (`winget install JRSoftware.InnoSetup --scope user`). Run `powershell -File tools\make_cert.ps1 -SkipTrust` once to create the signing certificate; without it the files are simply left unsigned.
-- **Second click:** clicking it again while it runs opens another window onto the same session; closing that extra window does not stop anything.
+- **Building it yourself:** `build-installer.bat` needs Rust and Inno Setup (`winget install JRSoftware.InnoSetup --scope user`). Run `powershell -File tools\make_cert.ps1 -SkipTrust` once to create the signing certificate; without it the files are simply left unsigned.
+- **Second click:** clicking it again while it runs brings the open window to the front.
 - **Already started with `start-yt.bat`?** The exe attaches to that session and leaves it running when you close the window.
 - **Same data as the browser:** the app and a browser tab on `http://localhost:8080` share one data file, `%LOCALAPPDATA%\MyTube\userdata.json` (subscriptions, history, watch later, settings, saved feed). Subscribe in one and it appears in the other; a window catches up when you switch back to it. The first time each connects, what it already had is merged in, so nothing is lost.
 - **A saved feed** is just the result of subscribing: open a channel, press **Subscribe**, then open **Feed**. The first load keeps a copy, and from then on every start shows that copy immediately.
 - **Logs and settings** live in `%LOCALAPPDATA%\MyTube` (`mytube.log`, and an optional `config.json`, see [below](#changing-things)).
-- **Windows warns about the exe or installer?** They are signed with a self-signed certificate, which Windows does not recognise as a known publisher. Choose *More info → Run anyway*, or run `python launcher.py`, which does the same without an exe. Verify a download with the SHA-256 on the release page.
+- **Windows warns about the exe or installer?** They are signed with a self-signed certificate, which Windows does not recognise as a known publisher. Choose *More info → Run anyway*, or build the exe yourself from a clone with `build-exe.bat`. Verify a download with the SHA-256 on the release page.
 
 ### Or in a browser tab: start-yt.bat
 
@@ -83,11 +83,11 @@ wsl -d Ubuntu-24.04 -- bash -lc "cd ~/invidious && docker compose up -d && exec 
 Open a **second** PowerShell window in the project folder:
 
 ```powershell
-# 2. local web server
-python server.py
+# 2. local web server (no window of its own; stop it with stop-yt.bat)
+release\MyTube.exe --server
 ```
 
-Then open http://localhost:8080. To stop: press `Ctrl+C` in the second window, then run `wsl --shutdown`.
+Then open http://localhost:8080. To stop: run `stop-yt.bat` (or end *MyTube.exe* in Task Manager, then run `wsl --shutdown`). From a source checkout, `cargo run -- --server` runs the server in the console instead, and `Ctrl+C` stops it.
 
 ## Quick health check
 
@@ -122,12 +122,12 @@ YouTube changes often. When something stops working, updating is the first fix, 
 | Video takes several seconds to start at 720p/1080p | Normal: the adaptive manifest is generated on demand. Choose 360p in Settings for the fastest start. |
 | Download fails with `HTTP Error 403` | yt-dlp is out of date. Run `update-yt.bat` (or `python -m pip install -U "yt-dlp[default]"`). |
 | "Sign in to confirm you're not a bot" | Update everything. If it persists, restart your router to get a new IP address. |
-| `start-yt.bat` opens the browser but the page is blank | Another program uses port 8080. Close it, or start the server on another port: `set YT_PORT=8090` then `python server.py`. |
+| `start-yt.bat` opens the browser but the page is blank | Another program uses port 8080. Close it, or start the server on another port: `set YT_PORT=8090` then `release\MyTube.exe --server`. |
 | Containers stop on their own | The `yt-wsl` window was closed. Start again with `start-yt.bat`. |
 | Everything is slow or memory is tight | Check **Task Manager → VmmemWSL**. After `stop-yt.bat` it must disappear. Lower `memory=` in `%USERPROFILE%\.wslconfig` if you need more RAM for Windows. |
 | The exe says yt-dlp was not found | Install it with `winget install yt-dlp.yt-dlp`, or set `ytdlp` in `config.json` (see Changing things). |
 | The exe shows "WSL distribution not found" | Your distro has another name. Set `distro` in `config.json`. |
-| `python` is not recognized | Install Python 3 and tick "Add to PATH", or edit `start-yt.bat` to use the full path of your Python. |
+| `start-yt.bat` cannot find MyTube.exe | Run `build-exe.bat` once, or keep `release\MyTube.exe` from the repository. |
 
 ## First-time setup on a new PC
 
@@ -138,9 +138,9 @@ Short version; every step is explained in [BUILD-GUIDE.md](BUILD-GUIDE.md).
 3. Install Docker Engine inside Ubuntu (section 7): `curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker $USER`, then `wsl --shutdown`.
 4. Install the Windows tools:
    ```powershell
-   winget install Python.Python.3.12
    winget install Gyan.FFmpeg
    winget install DenoLand.Deno
+   winget install Python.Python.3.12     # then, in a new terminal:
    python -m pip install -U "yt-dlp[default]"
    ```
 5. Clone this repository, then set up Invidious in WSL with the included script (it generates the secret keys for you):
@@ -150,13 +150,13 @@ Short version; every step is explained in [BUILD-GUIDE.md](BUILD-GUIDE.md).
    wsl -d Ubuntu-24.04 -- bash deploy/setup-invidious.sh
    ```
    WSL opens in the same folder you are in, so the relative path works. The script installs Invidious in `~/invidious` inside Ubuntu and starts it. Run it with `--no-start` to only prepare the files.
-6. Run `build-exe.bat` once, then double-click `dist\MyTube.exe` (or use `start-yt.bat` for a browser tab). If your distro isn't called `Ubuntu-24.04`, set `distro` in `%LOCALAPPDATA%\MyTube\config.json` for the exe, and edit the name in the three `.bat` files for the browser route.
+6. Run `build-exe.bat` once (it needs Rust: `winget install Rustlang.Rustup`), or use the prebuilt `release\MyTube.exe`, then double-click `dist\MyTube.exe` (or use `start-yt.bat` for a browser tab). If your distro isn't called `Ubuntu-24.04`, set `distro` in `%LOCALAPPDATA%\MyTube\config.json` for the exe, and edit the name in the three `.bat` files for the browser route.
 
 ## Changing things
 
 | You want | Change |
 |---|---|
-| Another download folder | `VIDEO_DIR` / `AUDIO_DIR` at the top of `server.py` |
+| Another download folder | `videoDir` / `audioDir` in `%LOCALAPPDATA%\MyTube\config.json`, for example `{"videoDir": "D:\\Videos"}` |
 | Another web port | Environment variable `YT_PORT` |
 | Another WSL distro name, or a yt-dlp in an unusual place (exe) | `%LOCALAPPDATA%\MyTube\config.json`, for example `{"distro": "Ubuntu-22.04", "ytdlp": "C:\\tools\\yt-dlp.exe"}` |
 | Different Invidious address (another machine) | `INVIDIOUS_URL` and `INVIDIOUS_PUBLIC_URL` environment variables, and `public_url` in `compose.yaml` |

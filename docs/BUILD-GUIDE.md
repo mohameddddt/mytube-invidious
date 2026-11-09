@@ -202,7 +202,7 @@ Check virtualization: Task Manager → Performance → CPU → "Virtualization: 
 | Invidious | API/front service | Docker image `quay.io/invidious/invidious` | https://docs.invidious.io/installation/ |
 | invidious-companion | Stream/PO-token service | Docker image `quay.io/invidious/invidious-companion` | https://github.com/iv-org/invidious-companion |
 | PostgreSQL 14 | Invidious DB | Docker image `postgres:14` | https://hub.docker.com/_/postgres |
-| Python 3.12+ | UI backend runtime (suggested; stdlib only) | `winget install Python.Python.3.12` | https://www.python.org |
+| Rust (rustup) | builds the UI backend and launcher, MyTube.exe (only to build from source) | `winget install Rustlang.Rustup` | https://rustup.rs |
 | yt-dlp | Downloader | `winget install yt-dlp.yt-dlp` | https://github.com/yt-dlp/yt-dlp |
 | ffmpeg | Merge video+audio | `winget install Gyan.FFmpeg` | https://www.gyan.dev/ffmpeg/builds/ |
 | Deno | JS runtime for yt-dlp | `winget install DenoLand.Deno` | https://deno.com |
@@ -469,7 +469,7 @@ This section defines **what** the interface consists of and **which sources** it
 |---|---|---|
 | No framework, no build step | Plain HTML + CSS + vanilla JS | Zero build tooling, tiny memory in the browser |
 | One origin | All requests go to `localhost:8080` | No CORS problems, one place to change the Invidious address |
-| Thin backend | Python standard library (or any minimal HTTP server) | ~20 MB RAM, no dependencies |
+| Thin backend | Rust (`tiny_http`, `ureq`, `serde_json`), one ~1 MB exe | a few MB of RAM |
 | State in the browser | `localStorage` | No database or accounts needed |
 
 ### 10.2 Backend contract (UI backend on :8080)
@@ -546,7 +546,7 @@ WSL2 shuts its VM down after a short idle period when no Windows process is atta
 ```bat
 @echo off
 start "yt-wsl" /min wsl -d Ubuntu-24.04 -- bash -lc "cd ~/invidious && docker compose up -d && exec sleep infinity"
-start "yt-ui"  /min python "%~dp0server.py"
+start "" "%~dp0release\MyTube.exe" --server
 timeout /t 8 >nul
 start http://localhost:8080
 ```
@@ -688,7 +688,7 @@ Everything except the optional Phase 7 is built and checked. Deviations from the
 | Extras | `POST /download` also accepts `{playlist, profile}` (uses `archive.txt`); `GET /jobs` reports progress; POSTs from other origins and unknown `Host` headers are refused. |
 | Measured | Cold start to ready ≈ 1 min. `VmmemWSL` ≈ 1.0 GB while running (page cache included), 0 when stopped. Containers: companion ≈ 100–130 MB, Invidious ≈ 25 MB, Postgres ≈ 40–50 MB. |
 
-Repository layout: `server.py`, `web/` (UI), `start-yt.bat`, `stop-yt.bat`, `update-yt.bat`, `deploy/` (compose template and setup script), `docs/`.
+Repository layout: `src/` (Rust backend and launcher), `web/` (UI), `start-yt.bat`, `stop-yt.bat`, `update-yt.bat`, `deploy/` (compose template and setup script), `docs/`.
 
 ---
 

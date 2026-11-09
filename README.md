@@ -4,7 +4,7 @@ A personal, self-hosted YouTube interface for Windows. It runs [Invidious](https
 
 Everything runs on your own machine, costs nothing, and shuts down completely when you are done, so it uses 0 MB of RAM while stopped.
 
-![status](https://img.shields.io/badge/platform-Windows%2011%20%2B%20WSL2-informational) ![deps](https://img.shields.io/badge/runtime%20deps-none%20(stdlib%20only)-success)
+![status](https://img.shields.io/badge/platform-Windows%2011%20%2B%20WSL2-informational) ![built with](https://img.shields.io/badge/built%20with-Rust-success)
 
 ## Features
 
@@ -14,15 +14,15 @@ Everything runs on your own machine, costs nothing, and shuts down completely wh
 - **Suggestions from what you watch.** The feed mixes in videos related to the ones you liked, finished or saved for later, favouring channels you watch often. It is a small, local, explainable algorithm: each suggestion says which video it came from, and nothing leaves your PC.
 - **Downloads that land on your PC.** Choose Video (480p, 720p, 1080p) or Audio only (MP3), see exactly where it will be saved, and find the file again in the app's **Saved** page. Play it offline, save another copy, or open its folder in Explorer.
 - **Whole playlists.** Download a playlist from its page, from a search result, or from the video you are watching. Pick all of it or just the first 10, 25, 50 or 100 videos, follow per-video progress, and cancel at any time. Videos you already have are skipped and unavailable ones are passed over.
-- **Light by design.** No frameworks, no build step, no web fonts. The backend is one Python file using only the standard library. Containers have memory caps, and Invidious's background crawlers are turned off.
+- **Light by design.** No frameworks, no build step, no web fonts. The launcher and backend are one Rust program of about 1.3 MB that idles at a few MB of RAM, and the window is WebView2, which needs about a third less memory than a browser window. Containers have memory caps, and Invidious's background crawlers are turned off.
 - **Private.** Every service listens on `127.0.0.1` only. Avatars and thumbnails go through Invidious, so your browser never talks to Google directly.
 
 ## How it fits together
 
 ```
-Browser ── http://localhost:8080 ──> server.py ──> Invidious ──> companion ──> YouTube
-                 (this repo)            │           (WSL, Docker)   (stream tokens)
-                                        └──> yt-dlp + ffmpeg + Deno ──> Videos\yt, Music\yt
+Browser ── http://localhost:8080 ──> MyTube.exe ──> Invidious ──> companion ──> YouTube
+                 (this repo)             │            (WSL, Docker)   (stream tokens)
+                                         └──> yt-dlp + ffmpeg + Deno ──> Videos\yt, Music\yt
 ```
 
 Watching and downloading both use your home IP address, so hosting adds no extra internet traffic.
@@ -40,8 +40,8 @@ My Tube is a launcher and interface; the heavy lifting is done by tools that mus
 | 5 | yt-dlp | downloads | [github.com/yt-dlp/yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) |
 | 6 | ffmpeg | merges video and audio, makes MP3s | [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) |
 | 7 | Deno | lets yt-dlp solve YouTube's JavaScript checks | [docs.deno.com/runtime/getting_started/installation](https://docs.deno.com/runtime/getting_started/installation/) |
-| 8 | Python 3.12+ | installs yt-dlp, runs the browser-tab mode and builds from source | [python.org/downloads/windows](https://www.python.org/downloads/windows/) |
-| 9 | Microsoft Edge (or Chrome) | the app window; Edge is already part of Windows 11 | built in |
+| 8 | Python 3.12+ (optional) | one way to install and update yt-dlp; not needed with `winget install yt-dlp.yt-dlp` | [python.org/downloads/windows](https://www.python.org/downloads/windows/) |
+| 9 | WebView2 Runtime | the app window (the Edge engine for apps); already part of Windows 11 | built in |
 
 ### 1 and 2. WSL2 with Ubuntu
 
@@ -129,17 +129,17 @@ wsl -d Ubuntu-24.04 -- ls ~/invidious/compose.yaml
 yt-dlp --version
 ffmpeg -version
 deno --version
-python --version
 ```
 
 ### Only if you build from source
 
 ```powershell
 winget install Git.Git                            # to clone the repository
+winget install Rustlang.Rustup                    # to build MyTube.exe (build-exe.bat, cargo)
 winget install JRSoftware.InnoSetup --scope user  # to build the installer (build-installer.bat)
 ```
 
-Links: [git-scm.com/download/win](https://git-scm.com/download/win) · [Inno Setup releases](https://github.com/jrsoftware/issrc/releases). PyInstaller and Pillow, which the build needs, are installed automatically by the build scripts.
+Links: [git-scm.com/download/win](https://git-scm.com/download/win) · [Inno Setup releases](https://github.com/jrsoftware/issrc/releases). Any Rust toolchain works. The default (MSVC) one also needs the Visual Studio C++ Build Tools; `rustup default stable-x86_64-pc-windows-gnu` needs nothing else. The build embeds the icon and version information itself, so no resource compiler is required.
 
 ## Install
 
@@ -165,18 +165,19 @@ Prerequisites done? Then:
 ```powershell
 git clone https://github.com/mohameddddt/mytube-invidious.git
 cd mytube-invidious
-python launcher.py        # the same thing the app does, without building an exe
+cargo run --release                 # the desktop app, built and started in one step
+cargo run -- --server               # only the local server, with a console; web/ is read from disk
 ```
 
 To produce the exe or the installer yourself, see [The desktop app](#the-desktop-app).
 
 ## The desktop app
 
-`MyTube.exe` is one file of about 7 MB that contains the launcher, the local server and the whole interface. Click it and it:
+`MyTube.exe` is one file of about 1.3 MB that contains the launcher, the local server and the whole interface. `MyTube.exe --server` runs only the local server (that is what `start-yt.bat` uses). Click it and it:
 
 1. starts the Invidious containers in WSL (unless they are already running),
 2. starts the local server,
-3. opens My Tube in its own window (Edge in app mode: no tabs, no address bar).
+3. opens My Tube in its own window, drawn by WebView2 (the Edge engine built into Windows 11): no tabs, no address bar, and about a third less memory than an Edge window. Videos go properly full screen, links to other sites open in your browser, and while the window is minimized WebView2 is asked to keep its memory low.
 
 Closing the window stops everything it started and returns all of WSL's memory. If a download is still running it asks first.
 
@@ -196,11 +197,16 @@ Build just the exe with `build-exe.bat` (writes `dist\MyTube.exe`), or the signe
 ## Repository layout
 
 ```
-launcher.py               desktop launcher, packaged as MyTube.exe (starts the stack, the server and the app window)
-server.py                 local backend: serves the UI, proxies Invidious, runs yt-dlp jobs
+src/                      the Rust source of MyTube.exe
+  launcher.rs             desktop app: starts the stack, the server and the app window
+  window.rs               the app window: a Win32 window hosting WebView2
+  server.rs               local backend: serves the UI, proxies Invidious, serves downloaded files
+  jobs.rs, state.rs       yt-dlp download queue, shared user data (userdata.json)
+build.rs                  embeds web/ and writes the exe's icon, version information and manifest
+Cargo.toml, Cargo.lock    Rust package and pinned dependency versions
 web/                      the interface (index.html, style.css, app.js), no build step
 release/MyTube.exe        a prebuilt, signed copy of the desktop app
-build-exe.bat             build dist\MyTube.exe (PyInstaller)
+build-exe.bat             build dist\MyTube.exe (cargo build --release)
 build-installer.bat       build the signed installer dist\MyTube-Setup-<version>.exe
 VERSION                   the version number used by the exe, the installer and the release
 installer/                Inno Setup script for the installer
@@ -208,7 +214,8 @@ start-yt.bat              start everything on demand, in a browser tab
 stop-yt.bat               stop everything and free all WSL memory
 update-yt.bat             update Invidious, companion, yt-dlp, Deno and ffmpeg
 deploy/                   compose template and the script that installs Invidious in WSL
-tools/, assets/           build helpers (icon, version info, certificate, signing) and the app icon and public certificate
+tools/                    installer build, signing certificate and signing scripts (PowerShell)
+assets/                   app icon, public certificate, and Microsoft's WebView2Loader.dll (built into the exe)
 docs/                     build guide and launch guide
 ```
 
